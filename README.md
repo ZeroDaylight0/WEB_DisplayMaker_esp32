@@ -5,14 +5,14 @@ PixelForge is a browser-based editor for small displays used with Arduino and ES
 ## Run locally
 
 ```sh
-npm install
+npm ci
 # Terminal 1
 npm run dev:api
 # Terminal 2
 npm run dev
 ```
 
-The Vite development server proxies `/api` to the local account API on port 4174. Account data is stored in `data/accounts.json`. For production, build with `npm run build`, then start the combined API/static server with `NODE_ENV=production npm start`. Set `PIXELFORGE_DATA_DIR` to keep account data outside the application directory, back it up, and put the production server behind HTTPS before exposing it to the internet.
+Use Node.js 22.12 or later. The Vite development server proxies `/api` to the local account API on port 4174. Account and project data is stored in `data/pixelforge.sqlite` by default. On first startup, existing accounts and projects in `data/accounts.json` are imported into SQLite; the JSON file is retained as a backup and is not imported again. Stop the server before copying the SQLite database for a backup. Set `PIXELFORGE_DATA_DIR` to keep data outside the application directory. For production, build with `npm run build`, then start the combined API/static server with `NODE_ENV=production npm start`; put it behind HTTPS before exposing it to the internet.
 
 ## Desktop launchers
 
@@ -20,7 +20,7 @@ The Vite development server proxies `/api` to the local account API on port 4174
 - Linux: run `sh ./start-linux.sh` from the project folder. The server stays attached to that terminal; press Ctrl+C to stop it.
 - Ubuntu autostart: log in as the desktop user and run `sh ./install-ubuntu-autostart.sh` from the project folder (do not use `sudo`). The installer uses its own folder as the project directory by default and creates and enables a per-user systemd service; account data is stored under `~/.local/share/pixelforge`. To use a different project folder, set `PIXELFORGE_DIR` before running the installer.
 
-Build and test:
+Build and test (also run automatically on pushes and pull requests):
 
 ```sh
 npm run build

@@ -9,6 +9,9 @@ coverage/
 
 # Local application data
 data/
+*.sqlite
+*.sqlite-*
+*.db
 
 # Environment and secrets
 .env

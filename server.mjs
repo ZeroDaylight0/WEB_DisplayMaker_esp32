@@ -1,9 +1,10 @@
 import { createHash as sha256, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 import { createServer } from 'node:http'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { extname, join, normalize, resolve } from 'node:path'
+import { chmod, mkdir, readFile } from 'node:fs/promises'
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import Database from 'better-sqlite3'
 
 const scrypt = promisify(scryptCallback)
 const root = fileURLToPath(new URL('.', import.meta.url))
@@ -45,47 +46,105 @@ function hashToken(token) {
   return sha256('sha256').update(token).digest('hex')
 }
 
-export function createApiServer({ dataDir = join(root, 'data'), staticDir = join(root, 'dist'), serveStatic = true } = {}) {
-  const dataPath = join(dataDir, 'accounts.json')
-  const sessions = new Map()
+export async function createApiServer({ dataDir = join(root, 'data'), staticDir = join(root, 'dist'), serveStatic = true } = {}) {
   const loginAttempts = new Map()
-  let data = { users: [] }
-  let writeQueue = Promise.resolve()
+  await mkdir(dataDir, { recursive: true, mode: 0o700 })
+  await chmod(dataDir, 0o700)
+  const databasePath = join(dataDir, 'pixelforge.sqlite')
+  const database = new Database(databasePath, { timeout: 5000 })
+  await chmod(databasePath, 0o600)
+  database.pragma('journal_mode = WAL')
+  database.pragma('synchronous = FULL')
+  database.pragma('foreign_keys = ON')
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      usernameKey TEXT NOT NULL UNIQUE,
+      salt TEXT NOT NULL,
+      passwordHash TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      tokenHash TEXT PRIMARY KEY,
+      userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expiresAt INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS sessions_userId ON sessions(userId);
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      document TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS projects_userId_updatedAt ON projects(userId, updatedAt);
+    CREATE TABLE IF NOT EXISTS app_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `)
 
-  const persist = () => {
-    writeQueue = writeQueue.then(async () => {
-      await mkdir(dataDir, { recursive: true })
-      const temporaryPath = `${dataPath}.${randomUUID()}.tmp`
-      await writeFile(temporaryPath, JSON.stringify(data), { encoding: 'utf8', mode: 0o600 })
-      await rename(temporaryPath, dataPath)
-    })
-    return writeQueue
-  }
-
-  const initialize = async () => {
+  const legacyPath = join(dataDir, 'accounts.json')
+  const legacyMigration = database.prepare('SELECT value FROM app_metadata WHERE key = ?').get('accounts_json_imported')
+  if (!legacyMigration) {
+    let legacy
     try {
-      data = JSON.parse(await readFile(dataPath, 'utf8'))
-      if (!Array.isArray(data.users)) throw new Error('Invalid account storage format.')
+      legacy = JSON.parse(await readFile(legacyPath, 'utf8'))
     } catch (error) {
-      if (error.code !== 'ENOENT') throw error
-      await mkdir(dataDir, { recursive: true })
+      if (error.code !== 'ENOENT') {
+        database.close()
+        throw new Error(`Could not read legacy account data at ${legacyPath}: ${error.message}`, { cause: error })
+      }
     }
-    const now = Date.now()
-    for (const user of data.users) {
-      user.sessions = (user.sessions ?? []).filter((session) => session.expiresAt > now)
-      for (const session of user.sessions) sessions.set(session.tokenHash, user.id)
+    if (legacy !== undefined) {
+      if (!legacy || !Array.isArray(legacy.users)) {
+        database.close()
+        throw new Error(`Legacy account data at ${legacyPath} has an invalid format.`)
+      }
+      const insertUser = database.prepare('INSERT INTO users (id, username, usernameKey, salt, passwordHash) VALUES (?, ?, ?, ?, ?)')
+      const insertSession = database.prepare('INSERT INTO sessions (tokenHash, userId, expiresAt) VALUES (?, ?, ?)')
+      const insertProject = database.prepare('INSERT INTO projects (id, userId, name, updatedAt, document) VALUES (?, ?, ?, ?, ?)')
+      const now = Date.now()
+      try {
+        database.transaction(() => {
+          for (const user of legacy.users) {
+            if (typeof user.id !== 'string' || typeof user.username !== 'string' || typeof user.salt !== 'string' || typeof user.passwordHash !== 'string') {
+              throw new Error('Legacy account data contains an invalid user record.')
+            }
+            insertUser.run(user.id, user.username, user.username.toLowerCase(), user.salt, user.passwordHash)
+            for (const session of user.sessions ?? []) {
+              if (typeof session.tokenHash === 'string' && Number.isFinite(session.expiresAt) && session.expiresAt > now) {
+                insertSession.run(session.tokenHash, user.id, session.expiresAt)
+              }
+            }
+            for (const project of user.projects ?? []) {
+              if (typeof project.id !== 'string' || typeof project.name !== 'string' || typeof project.updatedAt !== 'string') {
+                throw new Error(`Legacy account ${user.username} contains an invalid project record.`)
+              }
+              insertProject.run(project.id, user.id, project.name, project.updatedAt, JSON.stringify(project.document ?? project))
+            }
+          }
+          database.prepare('INSERT INTO app_metadata (key, value) VALUES (?, ?)').run('accounts_json_imported', new Date().toISOString())
+        })()
+      } catch (error) {
+        database.close()
+        throw new Error(`Could not migrate legacy account data from ${legacyPath}: ${error.message}`, { cause: error })
+      }
     }
-    await persist()
   }
+
+  database.prepare('DELETE FROM sessions WHERE expiresAt <= ?').run(Date.now())
+  const userByUsername = database.prepare('SELECT id, username, salt, passwordHash FROM users WHERE usernameKey = ?')
+  const userBySession = database.prepare(`
+    SELECT users.id, users.username, users.salt, users.passwordHash
+    FROM sessions JOIN users ON users.id = sessions.userId
+    WHERE sessions.tokenHash = ? AND sessions.expiresAt > ?
+  `)
 
   const authenticate = (request) => {
     const token = cookieValue(request.headers.cookie, 'pixelforge_session')
     if (!token) return undefined
-    const tokenHash = hashToken(token)
-    const userId = sessions.get(tokenHash)
-    const user = data.users.find((item) => item.id === userId)
-    const session = user?.sessions.find((item) => item.tokenHash === tokenHash && item.expiresAt > Date.now())
-    return session ? user : undefined
+    return userBySession.get(hashToken(token), Date.now())
   }
 
   const rejectCrossSiteMutation = (request, response) => {
@@ -114,9 +173,17 @@ export function createApiServer({ dataDir = join(root, 'data'), staticDir = join
           reply(response, 404, { error: 'Not found.' })
           return
         }
-        const requested = pathname === '/' ? 'index.html' : normalize(decodeURIComponent(pathname)).replace(/^(\.\.[/\\])+/, '').replace(/^[/\\]+/, '')
-        const filename = resolve(staticDir, requested)
-        if (!filename.startsWith(resolve(staticDir) + '\\') && !filename.startsWith(resolve(staticDir) + '/')) {
+        let requested
+        try {
+          requested = pathname === '/' ? '/index.html' : decodeURIComponent(pathname)
+        } catch {
+          reply(response, 400, { error: 'Invalid URL path.' })
+          return
+        }
+        const staticRoot = resolve(staticDir)
+        const filename = resolve(staticRoot, `.${requested}`)
+        const relativePath = relative(staticRoot, filename)
+        if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
           response.writeHead(403).end()
           return
         }
@@ -165,7 +232,8 @@ export function createApiServer({ dataDir = join(root, 'data'), staticDir = join
           return
         }
         const username = body.username.trim()
-        let user = data.users.find((item) => item.username.toLowerCase() === username.toLowerCase())
+        const usernameKey = username.toLowerCase()
+        let user = userByUsername.get(usernameKey)
         if (pathname.endsWith('/register')) {
           if (user) {
             reply(response, 409, { error: 'That username is already registered.' })
@@ -173,12 +241,7 @@ export function createApiServer({ dataDir = join(root, 'data'), staticDir = join
           }
           const salt = randomBytes(16).toString('hex')
           const passwordHash = (await scrypt(body.password, salt, 64)).toString('hex')
-          if (data.users.some((item) => item.username.toLowerCase() === username.toLowerCase())) {
-            reply(response, 409, { error: 'That username is already registered.' })
-            return
-          }
-          user = { id: randomUUID(), username, salt, passwordHash, projects: [], sessions: [] }
-          data.users.push(user)
+          user = { id: randomUUID(), username, salt, passwordHash }
         } else {
           const suppliedHash = user ? Buffer.from(await scrypt(body.password, user.salt, 64)) : Buffer.alloc(64)
           const storedHash = user ? Buffer.from(user.passwordHash, 'hex') : Buffer.alloc(64)
@@ -189,9 +252,20 @@ export function createApiServer({ dataDir = join(root, 'data'), staticDir = join
         }
         const token = randomBytes(32).toString('base64url')
         const tokenHash = hashToken(token)
-        user.sessions.push({ tokenHash, expiresAt: Date.now() + sessionAge })
-        sessions.set(tokenHash, user.id)
-        await persist()
+        try {
+          database.transaction(() => {
+            if (pathname.endsWith('/register')) {
+              database.prepare('INSERT INTO users (id, username, usernameKey, salt, passwordHash) VALUES (?, ?, ?, ?, ?)').run(user.id, user.username, usernameKey, user.salt, user.passwordHash)
+            }
+            database.prepare('INSERT INTO sessions (tokenHash, userId, expiresAt) VALUES (?, ?, ?)').run(tokenHash, user.id, Date.now() + sessionAge)
+          })()
+        } catch (error) {
+          if (pathname.endsWith('/register') && error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+            reply(response, 409, { error: 'That username is already registered.' })
+            return
+          }
+          throw error
+        }
         const secureCookie = process.env.NODE_ENV === 'production' ? '; Secure' : ''
         reply(response, 200, { user: publicUser(user) }, {
           'set-cookie': `pixelforge_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${sessionAge / 1000}${secureCookie}`,
@@ -202,11 +276,7 @@ export function createApiServer({ dataDir = join(root, 'data'), staticDir = join
       if (request.method === 'POST' && pathname === '/api/auth/logout') {
         const token = cookieValue(request.headers.cookie, 'pixelforge_session')
         const tokenHash = token ? hashToken(token) : undefined
-        const userId = tokenHash ? sessions.get(tokenHash) : undefined
-        const user = data.users.find((item) => item.id === userId)
-        if (user && tokenHash) user.sessions = user.sessions.filter((session) => session.tokenHash !== tokenHash)
-        if (tokenHash) sessions.delete(tokenHash)
-        if (user) await persist()
+        if (tokenHash) database.prepare('DELETE FROM sessions WHERE tokenHash = ?').run(tokenHash)
         reply(response, 200, { ok: true }, { 'set-cookie': 'pixelforge_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0' })
         return
       }
@@ -223,7 +293,8 @@ export function createApiServer({ dataDir = join(root, 'data'), staticDir = join
         return
       }
       if (request.method === 'GET' && pathname === '/api/projects') {
-        reply(response, 200, { projects: user.projects.map(({ id, name, updatedAt }) => ({ id, name, updatedAt })) })
+        const projects = database.prepare('SELECT id, name, updatedAt FROM projects WHERE userId = ? ORDER BY rowid').all(user.id)
+        reply(response, 200, { projects })
         return
       }
       if (request.method === 'POST' && pathname === '/api/projects') {
@@ -232,24 +303,31 @@ export function createApiServer({ dataDir = join(root, 'data'), staticDir = join
           reply(response, 400, { error: 'Invalid project or project exceeds the 2 MB limit.' })
           return
         }
-        if (user.projects.length >= 100) {
+        const projectCount = database.prepare('SELECT COUNT(*) AS count FROM projects WHERE userId = ?').get(user.id).count
+        if (projectCount >= 100) {
           reply(response, 409, { error: 'Project limit reached (100). Delete an old cloud project first.' })
           return
         }
         const project = { id: randomUUID(), name: body.project.name, updatedAt: new Date().toISOString(), document: body.project }
-        user.projects.push(project)
-        await persist()
+        database.prepare('INSERT INTO projects (id, userId, name, updatedAt, document) VALUES (?, ?, ?, ?, ?)').run(
+          project.id,
+          user.id,
+          project.name,
+          project.updatedAt,
+          JSON.stringify(project.document),
+        )
         reply(response, 201, { project: { id: project.id, name: project.name, updatedAt: project.updatedAt, document: project.document } })
         return
       }
       const projectRoute = /^\/api\/projects\/([0-9a-f-]+)$/.exec(pathname)
       if (projectRoute && request.method === 'GET') {
-        const project = user.projects.find((item) => item.id === projectRoute[1])
+        const project = database.prepare('SELECT id, name, updatedAt, document FROM projects WHERE id = ? AND userId = ?').get(projectRoute[1], user.id)
+        if (project) project.document = JSON.parse(project.document)
         reply(response, project ? 200 : 404, project ? { project } : { error: 'Project not found.' })
         return
       }
       if (projectRoute && request.method === 'PUT') {
-        const project = user.projects.find((item) => item.id === projectRoute[1])
+        const project = database.prepare('SELECT id FROM projects WHERE id = ? AND userId = ?').get(projectRoute[1], user.id)
         if (!project) {
           reply(response, 404, { error: 'Project not found.' })
           return
@@ -259,21 +337,23 @@ export function createApiServer({ dataDir = join(root, 'data'), staticDir = join
           reply(response, 400, { error: 'Invalid project or project exceeds the 2 MB limit.' })
           return
         }
-        project.name = body.project.name
-        project.document = body.project
-        project.updatedAt = new Date().toISOString()
-        await persist()
-        reply(response, 200, { project: { id: project.id, name: project.name, updatedAt: project.updatedAt, document: project.document } })
+        const updatedAt = new Date().toISOString()
+        database.prepare('UPDATE projects SET name = ?, document = ?, updatedAt = ? WHERE id = ? AND userId = ?').run(
+          body.project.name,
+          JSON.stringify(body.project),
+          updatedAt,
+          project.id,
+          user.id,
+        )
+        reply(response, 200, { project: { id: project.id, name: body.project.name, updatedAt, document: body.project } })
         return
       }
       if (projectRoute && request.method === 'DELETE') {
-        const index = user.projects.findIndex((item) => item.id === projectRoute[1])
-        if (index < 0) {
+        const deleted = database.prepare('DELETE FROM projects WHERE id = ? AND userId = ?').run(projectRoute[1], user.id)
+        if (deleted.changes === 0) {
           reply(response, 404, { error: 'Project not found.' })
           return
         }
-        user.projects.splice(index, 1)
-        await persist()
         reply(response, 200, { ok: true })
         return
       }
@@ -288,7 +368,9 @@ export function createApiServer({ dataDir = join(root, 'data'), staticDir = join
     }
   }
 
-  return initialize().then(() => createServer(handler))
+  const server = createServer(handler)
+  server.once('close', () => database.close())
+  return server
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
