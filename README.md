@@ -7,7 +7,7 @@
 Создавайте макеты дисплеев, импортируйте существующий код и экспортируйте графику или заготовки прошивки — прямо в браузере.
 
 [![CI](https://github.com/ZeroDaylight0/WEB_DisplayMaker_esp32/actions/workflows/ci.yml/badge.svg)](https://github.com/ZeroDaylight0/WEB_DisplayMaker_esp32/actions/workflows/ci.yml)
-![Node.js 20, 22, 24+](https://img.shields.io/badge/Node.js-20%20%7C%2022%20%7C%2024%2B-43853D?logo=node.js&logoColor=white)
+![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-43853D?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-React-3178C6?logo=typescript&logoColor=white)
 
 </div>
@@ -40,7 +40,7 @@
 
 ## Быстрый запуск
 
-Требуются **Node.js 20, 22 или 24+** и npm. Рекомендуется Node.js 22 LTS. Node.js 21 и 23 не поддерживаются build-зависимостями. В частности, Node.js 21.4.0 может заставить `better-sqlite3` собираться из исходников с C++20, что требует достаточно нового компилятора. Используйте Node.js 22 вместо ручной настройки компилятора.
+Требуются **Node.js 20 или новее** и npm. Рекомендуется Node.js 22 LTS; Node.js 21.4.0 также проверяется на Ubuntu. `better-sqlite3` собирается с C++17, что совместимо со стандартным GCC в Ubuntu 20.04 и новее — устанавливать Visual Studio или обновлять системный компилятор не нужно.
 
 ```sh
 git clone https://github.com/ZeroDaylight0/WEB_DisplayMaker_esp32.git
