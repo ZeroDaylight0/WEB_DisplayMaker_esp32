@@ -17,18 +17,18 @@ if [ ! -f "$APP_DIR/package.json" ] || [ ! -f "$APP_DIR/server.mjs" ]; then
   exit 1
 fi
 if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-  echo "Install Node.js 20+ (including npm), then run this script again." >&2
+  echo "Install Node.js 20, 22, or 24+ (including npm), then run this script again. Node.js 22 LTS is recommended." >&2
   exit 1
 fi
 
-if ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)'; then
-  echo "PixelForge requires Node.js 20 or later." >&2
+if ! node -e 'const major = Number(process.versions.node.split(".")[0]); process.exit(major === 20 || major === 22 || major >= 24 ? 0 : 1)'; then
+  echo "PixelForge requires Node.js 20, 22, or 24+. Node.js 21 and 23 are not supported by its build dependencies; use Node.js 22 LTS." >&2
   exit 1
 fi
 
 cd "$APP_DIR"
-if [ ! -d node_modules ]; then
-  npm install
+if [ ! -d node_modules ] || ! node -e 'require("better-sqlite3")' >/dev/null 2>&1; then
+  npm ci
 fi
 npm run build
 mkdir -p "$DATA_DIR" "$SERVICE_DIR"
