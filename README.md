@@ -40,7 +40,7 @@
 
 ## Быстрый запуск
 
-Требуется **Node.js 20 или новее** и npm. Node.js 20 и 22 — рекомендуемые поддерживаемые LTS-релизы. Совместимость также проверяется с Node.js 21.4.0.
+Требуется **Node.js 20 или новее** и npm. Node.js 20 и 22 — рекомендуемые поддерживаемые LTS-релизы. Node.js 21.4.0 также проверяется на Ubuntu. У Node 21 нет готового Windows-бинарника для `better-sqlite3`, поэтому на Windows эта версия требует Visual Studio Build Tools с C++; проще использовать Node 20 или 22.
 
 ```sh
 git clone https://github.com/ZeroDaylight0/WEB_DisplayMaker_esp32.git
