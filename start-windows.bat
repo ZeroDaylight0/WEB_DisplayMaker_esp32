@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo Node.js is not installed. Install Node.js 22.12+ and try again.
+  echo Node.js is not installed. Install Node.js 20+ and try again.
   pause
   exit /b 1
 )
@@ -15,9 +15,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-node -e "const [major, minor] = process.versions.node.split('.').map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)"
+node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 20 ? 0 : 1)"
 if errorlevel 1 (
-  echo PixelForge requires Node.js 22.12 or later.
+  echo PixelForge requires Node.js 20 or later.
   pause
   exit /b 1
 )
