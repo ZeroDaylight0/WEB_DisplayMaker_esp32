@@ -3,6 +3,31 @@ import { parseDisplaySource, updateImportedSource } from './source-import'
 import type { Project } from './types'
 
 describe('imported display source', () => {
+  it('previews the ESP32-C3 ILI9341 inverter power example', () => {
+    const source = [
+      '#include <Arduino_GFX_Library.h>',
+      '// ESP32-C3 Super Mini, ILI9341 240x320, MQTT inverter output_active_power_w',
+      'void pixelForgeCanvasPreview() {',
+      '  gfx->fillScreen(0x0841);',
+      '  gfx->fillRoundRect(8, 8, 224, 304, 18, 0x10A3);',
+      '  gfx->drawCircle(120, 150, 86, 0x2949);',
+      '  gfx->drawLine(59, 211, 50, 200, 0x05FF);',
+      '  gfx->setCursor(22, 38);',
+      '  gfx->print("OUTPUT POWER");',
+      '  gfx->setCursor(35, 249);',
+      '  gfx->print("ACTIVE LOAD");',
+      '  gfx->setCursor(52, 263);',
+      '  gfx->print("1240 W");',
+      '}',
+    ].join('\n')
+    const parsed = parseDisplaySource(source, 'arduino')
+    expect(parsed.suggestedDisplayId).toBe('ili9341-240x320')
+    expect(parsed.suggestedSize).toEqual({ width: 240, height: 320 })
+    expect(parsed.elements.some((element) => element.text === 'OUTPUT POWER')).toBe(true)
+    expect(parsed.elements.some((element) => element.text === 'ACTIVE LOAD')).toBe(true)
+    expect(parsed.elements.some((element) => element.text === '1240 W')).toBe(true)
+  })
+
   it('parses U8g2 draw calls and patches only display calls in the original sketch', () => {
     const source = [
       '#include <U8g2lib.h>',
