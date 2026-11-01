@@ -6,6 +6,8 @@
 
 Создавайте макеты дисплеев, импортируйте существующий код и экспортируйте графику или заготовки прошивки прямо в браузере.
 
+**[▶ Открыть демо в браузере](https://zerodaylight0.github.io/WEB_DisplayMaker_esp32/)** — без установки; аккаунты и облачная синхронизация работают только при запуске своего сервера.
+
 [![CI](https://github.com/ZeroDaylight0/WEB_DisplayMaker_esp32/actions/workflows/ci.yml/badge.svg)](https://github.com/ZeroDaylight0/WEB_DisplayMaker_esp32/actions/workflows/ci.yml)
 ![Node.js 22.13+](https://img.shields.io/badge/Node.js-22.13%2B-43853D?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-React-3178C6?logo=typescript&logoColor=white)

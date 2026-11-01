@@ -243,6 +243,7 @@ function App() {
   const dragRef = useRef<{ id: string; mode: 'move' | 'resize'; dx: number; dy: number; snapshot: Project; moved: boolean } | null>(null)
 
   useEffect(() => {
+    if (__STATIC_DEMO__) return
     getCurrentUser().then(setAccount).catch((error: unknown) => {
       console.error('Не удалось проверить аккаунт:', error)
       setToast('Не удалось подключиться к серверу аккаунтов')
@@ -905,8 +906,10 @@ function App() {
         <button className="icon-button quiet top-action" title="Импортировать проект" onClick={() => importRef.current?.click()}><FolderIcon /> <span>Открыть</span></button>
         <button className="icon-button quiet top-action" title="Загрузить готовый код" onClick={openSourceImport}><FileCode2 size={15} /><span>{project.sourceCode ? 'Исходник' : 'Загрузить код'}</span></button>
         <button className="icon-button quiet top-action" title="Экспортировать веб-проект в JSON" onClick={saveProject}><Download size={16} /><span>Экспорт JSON</span></button>
-        <button className="icon-button quiet top-action account-action" title="Аккаунт и синхронизация" onClick={openAccount}><UserRound size={15} /><span>{account?.username ?? 'Аккаунт'}</span></button>
-        <button className="button button-secondary save-web-button" onClick={() => void saveWebProject()} disabled={cloudBusy}><Cloud size={15} />{cloudBusy ? 'Синхронизация…' : 'Сохранить веб-проект'}</button>
+        {!__STATIC_DEMO__ && <>
+          <button className="icon-button quiet top-action account-action" title="Аккаунт и синхронизация" onClick={openAccount}><UserRound size={15} /><span>{account?.username ?? 'Аккаунт'}</span></button>
+          <button className="button button-secondary save-web-button" onClick={() => void saveWebProject()} disabled={cloudBusy}><Cloud size={15} />{cloudBusy ? 'Синхронизация…' : 'Сохранить веб-проект'}</button>
+        </>}
         <button className="button button-primary" onClick={() => setIsCodeOpen(true)}><Code2 size={16} /> Сгенерировать код <ChevronDown size={13} /></button>
         <input ref={importRef} hidden type="file" accept=".json,.pixelforge.json,application/json" onChange={(event) => void importProject(event.target.files?.[0])} />
         <input ref={imageImportRef} hidden type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => importImage(event.target.files?.[0])} />
