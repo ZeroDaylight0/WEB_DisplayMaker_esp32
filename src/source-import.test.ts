@@ -66,7 +66,7 @@ describe('imported display source', () => {
       '}',
     ].join('\n')
     const parsed = parseDisplaySource(source, 'arduino')
-    expect(parsed.elements[0]).toMatchObject({ kind: 'rect', name: 'Блок 1', width: 320, height: 240, fill: '#000000' })
+    expect(parsed.elements[0]).toMatchObject({ kind: 'rect', name: 'Box 1', width: 320, height: 240, fill: '#000000' })
     const project: Project = {
       name: 'CYD', displayId: 'cyd-28-ili9341', width: 320, height: 240, color: true,
       elements: [{ ...parsed.elements[0], fill: '#ffffff' }, parsed.elements[1]],
@@ -110,7 +110,7 @@ describe('imported display source', () => {
       elements: [], sourceCode: source, sourceFormat: 'arduino',
     })
     expect(result?.code).toBe(source)
-    expect(result?.warnings[0]).toContain('Не удалось распознать')
+    expect(result?.warnings[0]).toContain('No supported drawing commands')
   })
 
   it('detects integrated CYD and LilyGO board names in uploaded source', () => {
@@ -249,7 +249,7 @@ describe('imported display source', () => {
     ].join('\n')
     const parsed = parseDisplaySource(source, 'esphome')
     expect(parsed.elements).toHaveLength(2)
-    expect(parsed.warnings.join(' ')).not.toContain('команда(ы)')
+    expect(parsed.warnings.join(' ')).not.toContain('command(s)')
     const project: Project = {
       name: 'Imported', displayId: 'ili9341-240x320', width: 240, height: 320, color: true,
       elements: parsed.elements.map((element, index) => index === 1 ? { ...element, x: 12 } : element),
@@ -323,8 +323,8 @@ describe('imported display source', () => {
     expect(parsed.elements[3]).toMatchObject({ kind: 'text', fill: '#00ff22', text: 'SAFE', fontSize: 48 })
     expect(parsed.elements[4]).toMatchObject({ kind: 'text', fill: '#999999', text: '0%  …', fontSize: 16 })
     expect(parsed.elements[4].dynamicVariables).toEqual(['cur_hum', 'weather_desc'])
-    expect(parsed.warnings.join(' ')).not.toContain('команда(ы)')
-    expect(parsed.warnings.join(' ')).toContain('Условные ветки можно переключать')
+    expect(parsed.warnings.join(' ')).not.toContain('command(s)')
+    expect(parsed.warnings.join(' ')).toContain('Conditional branches can be switched')
 
     const project: Project = {
       name: 'Alert', displayId: 'cyd-28-ili9341', width: 320, height: 240, color: true,
@@ -380,7 +380,7 @@ describe('imported display source', () => {
     expect(parsed.elements).toHaveLength(2)
     expect(parsed.elements[0]).toMatchObject({
       kind: 'text',
-      text: 'Сообщение',
+      text: 'Message',
       x: 64,
       y: 32,
       fontSize: 18,
@@ -390,8 +390,8 @@ describe('imported display source', () => {
     })
     expect(parsed.elements[1]).toMatchObject({ x: 0, y: 10, textAnchor: 'start', textBaseline: 'hanging' })
     expect(parsed.sourceTopics).toEqual([{ id: 'status_msg', topic: 'esp/zvonok' }])
-    expect(parsed.warnings.join(' ')).not.toContain('Не удалось распознать')
-    expect(parsed.warnings.join(' ')).not.toContain('команда(ы)')
+    expect(parsed.warnings.join(' ')).not.toContain('No supported drawing commands')
+    expect(parsed.warnings.join(' ')).not.toContain('command(s)')
     const project: Project = {
       name: 'Weather alert', displayId: 'ssd1306-128x64', width: 128, height: 64, color: false,
       elements: parsed.elements.map((element, index) => index === 0 ? { ...element, x: 60 } : element),
@@ -473,7 +473,7 @@ describe('imported display source', () => {
     expect(parsed.suggestedDisplayId).toBe('ssd1306-128x64')
     expect(parsed.sourceTopics).toEqual([{ id: 'status_msg', topic: 'esp/zvonok' }])
     expect(parsed.elements.map((element) => element.text).filter(Boolean)).toEqual([
-      'Сообщение', 'NOW', '45%', '21.5', 'C', 'RED', 'WARN', 'SAFE', 'CLEAR',
+      'Message', 'NOW', '45%', '21.5', 'C', 'RED', 'WARN', 'SAFE', 'CLEAR',
     ])
     expect(parsed.elements.find((element) => element.y === 46)).toMatchObject({ dynamicVariables: ['temp_buf'] })
     expect(parsed.elements.at(-1)?.dynamicVariables).toEqual(['weather_str'])
@@ -495,14 +495,14 @@ describe('imported display source', () => {
     expect(mainScreen).toBeDefined()
     expect(parsed.sourceBranchSelection[mainScreen!.id]).toBe(1)
     const alertState = parsed.sourceBranchGroups.find((group) => group.label.includes('id(alert_status) == 3'))
-    expect(alertState?.choices.at(-1)).toBe('ни одно условие не выполнено')
+    expect(alertState?.choices.at(-1)).toBe('no condition matched')
     expect(parsed.sourceBranchSelection[alertState!.id]).toBe(alertState!.choices.length - 1)
     const alertContainer = parsed.sourceBranchGroups.find((group) => group.label.includes('id(alert_status) > 0'))
     expect(alertContainer).toBeDefined()
     expect(parsed.sourceBranchSelection[alertContainer!.id]).toBe(0)
     expect(alertState?.parentPath).toContainEqual({ id: alertContainer!.id, choice: 0 })
-    expect(parsed.warnings.join(' ')).not.toContain('Не удалось распознать')
-    expect(parsed.warnings.join(' ')).not.toContain('команда(ы)')
+    expect(parsed.warnings.join(' ')).not.toContain('No supported drawing commands')
+    expect(parsed.warnings.join(' ')).not.toContain('command(s)')
   })
 
   it('updates extracted MQTT topic values without rewriting unrelated YAML', () => {
@@ -589,7 +589,7 @@ describe('imported display source', () => {
     const parsed = parseDisplaySource(source, 'arduino')
     expect(parsed.suggestedDisplayId).toBe('ssd1306-128x64')
     expect(parsed.suggestedSize).toEqual({ width: 128, height: 64 })
-    expect(parsed.warnings.join(' ')).not.toContain('команда(ы)')
+    expect(parsed.warnings.join(' ')).not.toContain('command(s)')
     expect(parsed.elements.map((e) => e.text).filter(Boolean)).toEqual([
       'Title', 'Temp: ', '21.5', ' C', 'Hum: ', '45%',
     ])
@@ -630,7 +630,7 @@ describe('imported display source', () => {
     const parsed = parseDisplaySource(source, 'arduino')
     expect(parsed.renderer).toBe('u8g2')
     expect(parsed.suggestedDisplayId).toBe('ssd1306-128x64')
-    expect(parsed.warnings.join(' ')).not.toContain('команда(ы)')
+    expect(parsed.warnings.join(' ')).not.toContain('command(s)')
     expect(parsed.elements).toHaveLength(4)
     expect(parsed.elements[0]).toMatchObject({ kind: 'text', x: 10, y: 10, text: 'Привет', fontSize: 14 })
     expect(parsed.elements[1]).toMatchObject({ kind: 'line', x: 0, y: 30, width: 128, height: 0 })
@@ -675,7 +675,7 @@ describe('imported display source', () => {
       '}',
     ].join('\n')
     const parsed = parseDisplaySource(source, 'arduino')
-    expect(parsed.warnings.join(' ')).not.toContain('команда(ы)')
+    expect(parsed.warnings.join(' ')).not.toContain('command(s)')
     expect(parsed.elements.find((element) => element.text === 'ALERT')).toMatchObject({
       x: 64, textAnchor: 'middle', text: 'ALERT',
     })
@@ -733,7 +733,7 @@ describe('imported display source', () => {
     const parsed = parseDisplaySource(source, 'arduino')
     expect(parsed.renderer).toBe('tft-espi')
     expect(parsed.suggestedSize).toEqual({ width: 320, height: 240 })
-    expect(parsed.warnings.join(' ')).not.toContain('команда(ы)')
+    expect(parsed.warnings.join(' ')).not.toContain('command(s)')
     expect(parsed.elements).toHaveLength(4)
     expect(parsed.elements[0]).toMatchObject({ kind: 'rect', width: 320, height: 240, fill: '#000000' })
     expect(parsed.elements[1]).toMatchObject({ kind: 'text', x: 10, y: 10, text: 'Speed', fill: '#ffff00' })

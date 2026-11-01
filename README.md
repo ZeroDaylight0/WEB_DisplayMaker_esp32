@@ -2,13 +2,15 @@
 
 # PixelForge
 
-### Визуальный редактор экранов для Arduino, ESP32 и ESPHome
+### Visual screen editor for Arduino, ESP32 and ESPHome
 
-Создавайте макеты дисплеев, импортируйте существующий код и экспортируйте графику или заготовки прошивки прямо в браузере.
+Design display layouts, import existing code and export graphics or firmware-ready code right in your browser.
 
-**[▶ Открыть демо в браузере](https://zerodaylight0.github.io/WEB_DisplayMaker_esp32/)** — без установки; аккаунты и облачная синхронизация работают только при запуске своего сервера.
+**[▶ Try the live demo](https://zerodaylight0.github.io/WEB_DisplayMaker_esp32/)** — no install needed. Accounts and cloud sync are available when you run your own server.
 
 [![CI](https://github.com/ZeroDaylight0/WEB_DisplayMaker_esp32/actions/workflows/ci.yml/badge.svg)](https://github.com/ZeroDaylight0/WEB_DisplayMaker_esp32/actions/workflows/ci.yml)
+[![Pages demo](https://github.com/ZeroDaylight0/WEB_DisplayMaker_esp32/actions/workflows/pages.yml/badge.svg)](https://zerodaylight0.github.io/WEB_DisplayMaker_esp32/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Node.js 22.13+](https://img.shields.io/badge/Node.js-22.13%2B-43853D?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-React-3178C6?logo=typescript&logoColor=white)
 ![Linux · Windows · macOS · Docker](https://img.shields.io/badge/Linux%20%C2%B7%20Windows%20%C2%B7%20macOS%20%C2%B7%20Docker-supported-555)
@@ -17,36 +19,36 @@
 
 ---
 
-## Интерфейс
+## Interface
 
-![PixelForge: библиотека дисплеев, редактор холста и панель свойств](docs/screenshots/editor.png)
+![PixelForge: display library, canvas editor and properties panel](docs/screenshots/editor.png)
 
-<p align="center"><sub>Рабочее пространство: каталог дисплеев, предпросмотр экрана и свойства выбранного элемента.</sub></p>
+<p align="center"><sub>Workspace: display catalog, live screen preview and properties of the selected element.</sub></p>
 
 <details>
-<summary>Крупнее: редактирование макета на дисплее</summary>
+<summary>Close-up: editing a layout on the display</summary>
 
-![Крупный план холста PixelForge](docs/screenshots/canvas-detail.png)
+![PixelForge canvas close-up](docs/screenshots/canvas-detail.png)
 
 </details>
 
-## Возможности
+## Features
 
 | | |
 |---|---|
-| **Визуальный редактор** | Текст, прямоугольники (в том числе скруглённые), круги, линии и изображения. Заливка или только контур, слои, отмена и повтор, привязка к сетке, сдвиг стрелками, масштаб. |
-| **Импорт исходников** | Загрузка Arduino `.ino` / `.cpp` и ESPHome YAML: распознанные команды превращаются в редактируемые элементы. |
-| **Экспорт** | Макеты в PNG, SVG и JSON. Заготовки кода для Arduino (U8g2 / Arduino_GFX) и ESPHome, с поддержкой кириллицы. |
-| **Свои дисплеи** | Любое разрешение от 8 до 2048 px; пользовательские дисплеи сохраняются в браузере. |
-| **Сохранение проектов** | Автосохранение в браузере, а также аккаунты на вашем сервере для синхронизации проектов между устройствами. |
+| **Visual editor** | Text, rectangles (including rounded), circles, lines and images. Fill or outline only, layers, undo and redo, grid snapping, arrow-key nudging and zoom. |
+| **Source import** | Load Arduino `.ino` / `.cpp` or ESPHome YAML: recognized commands become editable elements. |
+| **Export** | Layouts as PNG, SVG and JSON. Starter code for Arduino (U8g2 / Arduino_GFX) and ESPHome, with Cyrillic text support. |
+| **Custom displays** | Any resolution from 8 to 2048 px; custom displays are saved in the browser. |
+| **Project storage** | Autosave in the browser, plus accounts on your own server to sync projects between devices. |
 
-Импортёр понимает распространённые команды рисования U8g2, TFT_eSPI, Adafruit_GFX / Arduino_GFX и ESPHome. Исходный файл сохраняется целиком, а при экспорте меняются только распознанные команды отрисовки. Нераспознанный или динамический код остаётся нетронутым и выводится в предупреждениях.
+The importer understands common U8g2, TFT_eSPI, Adafruit_GFX / Arduino_GFX and ESPHome drawing commands. The original file is kept as a whole, and export replaces only the recognized drawing commands. Unrecognized or dynamic code is left untouched and listed in the warnings.
 
-## Быстрый запуск
+## Quick start
 
-Нужны **Node.js 22.13 или новее** и npm. Подойдёт любая актуальная LTS-версия: 22 или 24.
+You need **Node.js 22.13 or newer** and npm. Any current LTS release works: 22 or 24.
 
-Хранилище работает на встроенном в Node.js модуле `node:sqlite`, поэтому нативные модули при установке не компилируются: не нужны ни `gcc`/`make`/`python`, ни Visual Studio.
+Storage uses Node.js's built-in `node:sqlite` module, so nothing native is compiled during install: no `gcc`/`make`/`python` and no Visual Studio.
 
 ### Linux / macOS
 
@@ -56,21 +58,21 @@ cd WEB_DisplayMaker_esp32
 ./start-linux.sh
 ```
 
-Скрипт при необходимости установит зависимости, соберёт редактор (только если исходники изменились) и запустит сервер на http://localhost:4173.
+The script installs dependencies if needed, builds the editor (only when the sources changed) and starts the server on http://localhost:4173.
 
-> Если Node.js в дистрибутиве старее 22.13 (например, `apt install nodejs` в Ubuntu 22.04/24.04), поставьте свежую версию через [nvm](https://github.com/nvm-sh/nvm) (`nvm install --lts`) или [NodeSource](https://github.com/nodesource/distributions).
+> If your distribution ships Node.js older than 22.13 (for example `apt install nodejs` on Ubuntu 22.04/24.04), install a recent version with [nvm](https://github.com/nvm-sh/nvm) (`nvm install --lts`) or [NodeSource](https://github.com/nodesource/distributions).
 
-**Автозапуск на Ubuntu и других дистрибутивах с systemd.** Выполните под своим пользователем, **без `sudo`**:
+**Autostart on Ubuntu and other systemd distributions.** Run as your own user, **without `sudo`**:
 
 ```sh
 ./install-ubuntu-autostart.sh
 ```
 
-Скрипт создаст пользовательскую службу `pixelforge.service`. Логи: `journalctl --user -u pixelforge -f`. Чтобы служба работала без входа в систему (например, на headless-сервере), включите `sudo loginctl enable-linger $USER`.
+The script creates a user service `pixelforge.service`. Logs: `journalctl --user -u pixelforge -f`. To keep the service running without logging in (for example on a headless server), enable `sudo loginctl enable-linger $USER`.
 
 ### Windows
 
-Запустите [`start-windows.bat`](./start-windows.bat).
+Run [`start-windows.bat`](./start-windows.bat).
 
 ### Docker
 
@@ -78,82 +80,84 @@ cd WEB_DisplayMaker_esp32
 docker compose up -d --build
 ```
 
-Данные хранятся в томе `pixelforge-data`. Образ не требует `node_modules` для работы и запускается от непривилегированного пользователя.
+Data lives in the `pixelforge-data` volume. The image needs no `node_modules` at runtime and runs as an unprivileged user.
 
-## Настройка сервера
+## Server configuration
 
-| Переменная | По умолчанию | Назначение |
+| Variable | Default | Purpose |
 |---|---|---|
-| `PORT` | `4173` (production), `4174` (dev API) | Порт HTTP-сервера. |
-| `HOST` | `127.0.0.1` | Адрес прослушивания. `0.0.0.0` открывает доступ из локальной сети. |
-| `PIXELFORGE_DATA_DIR` | `./data` | Каталог с базой SQLite. |
-| `PIXELFORGE_ALLOW_REGISTRATION` | `1` | `0` отключает регистрацию новых аккаунтов. Удобно после создания своего аккаунта. |
-| `PIXELFORGE_TRUST_PROXY` | `0` | `1`, если сервер стоит за reverse proxy (nginx, Caddy, Traefik): тогда учитываются `X-Forwarded-*`. |
-| `PIXELFORGE_SECURE_COOKIE` | авто | Флаг `Secure` для cookie. По умолчанию ставится только при HTTPS, поэтому вход работает и по `http://<ip>:4173` в локальной сети. |
+| `PORT` | `4173` (production), `4174` (dev API) | HTTP server port. |
+| `HOST` | `127.0.0.1` | Listen address. `0.0.0.0` allows access from the local network. |
+| `PIXELFORGE_DATA_DIR` | `./data` | Directory for the SQLite database. |
+| `PIXELFORGE_ALLOW_REGISTRATION` | `1` | `0` disables new account registration. Handy once you have created your own account. |
+| `PIXELFORGE_TRUST_PROXY` | `0` | `1` when the server runs behind a reverse proxy (nginx, Caddy, Traefik), so `X-Forwarded-*` headers are trusted. |
+| `PIXELFORGE_SECURE_COOKIE` | auto | `Secure` cookie flag. By default it is set only over HTTPS, so sign-in also works over `http://<ip>:4173` on a local network. |
 
-Пример доступа из локальной сети без новых регистраций:
+Example: local network access with registration disabled:
 
 ```sh
 HOST=0.0.0.0 PIXELFORGE_ALLOW_REGISTRATION=0 ./start-linux.sh
 ```
 
-## Разработка
+## Development
 
 ```sh
 npm ci
-npm run dev:api   # терминал 1: API на порту 4174
-npm run dev       # терминал 2: Vite; запросы /api проксируются на API
+npm run dev:api   # terminal 1: API on port 4174
+npm run dev       # terminal 2: Vite; /api requests are proxied to the API
 ```
 
-Проверки (те же, что в GitHub Actions на Linux, Windows и macOS):
+Checks (the same ones GitHub Actions runs on Linux, Windows and macOS):
 
 ```sh
-npm run check     # build + тесты редактора + тесты API
+npm run check     # build + editor tests + API tests
 ```
 
-## Дисплеи и экспорт кода
+The static demo is built with `STATIC_DEMO=1 npm run build`. It hides accounts and cloud sync, which need the API server, and is deployed to GitHub Pages on every push to `main`.
 
-В каталоге есть OLED, TFT, e-paper и LED-матрицы, в том числе SSD1306, SH1106, SSD1309, SSD1327, ST7735, ST7789, ILI9341, ILI9488, GC9A01 и MAX7219. Также доступны профили плат CYD, TTGO / LILYGO T-Display, T-Embed, T-Deck и M5Stack Core2.
+## Displays and code export
 
-- **Arduino:** U8g2 для монохромных дисплеев (кириллица выводится через `drawUTF8` и `_t_cyrillic`-шрифты) и Arduino_GFX для цветных.
-- **ESPHome:** шаблоны для SSD1306 / SH1106 / SSD1327, ST7789, ILI9xxx, Waveshare e-paper и MAX7219. Для каждого размера текста создаётся свой шрифт; кириллица подключается через `glyphsets`.
+The catalog includes OLED, TFT, e-paper and LED matrices, among them SSD1306, SH1106, SSD1309, SSD1327, ST7735, ST7789, ILI9341, ILI9488, GC9A01 and MAX7219. Board profiles for CYD, TTGO / LILYGO T-Display, T-Embed, T-Deck and M5Stack Core2 are included too.
 
-Для неподдерживаемого сочетания PixelForge не подставляет фиктивный код: макет и экспорт изображения остаются доступны.
+- **Arduino:** U8g2 for monochrome displays (Cyrillic text via `drawUTF8` and `_t_cyrillic` fonts) and Arduino_GFX for color displays.
+- **ESPHome:** templates for SSD1306 / SH1106 / SSD1327, ST7789, ILI9xxx, Waveshare e-paper and MAX7219. Each text size gets its own font; Cyrillic is added through `glyphsets`.
 
-> Сгенерированный код — заготовка, а не готовая прошивка для любой платы. Перед прошивкой проверьте модель контроллера, распиновку, ориентацию, смещения и настройки библиотек. Указанные GPIO приведены как пример для ESP32. Импортированные изображения сохраняются в макете и графическом экспорте, но не преобразуются в bitmap для прошивки.
+For unsupported combinations PixelForge does not emit placeholder code: layout and image export remain available.
 
-### Пример: мощность инвертора на ESP32-C3
+> Generated code is a starting point, not finished firmware for every board. Before flashing, check the controller model, pinout, rotation, offsets and library settings. The GPIO numbers are an ESP32 example. Imported images are kept in the layout and image export but are not converted to bitmaps for firmware.
 
-[Скетч](./examples/esp32c3-ili9341-inverter-power/) для ESP32-C3 Super Mini и ILI9341 получает мощность инвертора в ваттах по MQTT, сам подбирает диапазон шкалы и крупно показывает текущее значение.
+### Example: inverter power on an ESP32-C3
 
-1. Скопируйте `secrets.example.h` в `secrets.h` в той же папке.
-2. Впишите в `secrets.h` Wi-Fi, адрес MQTT-брокера, логин и пароль, а также топик `POWER_TOPIC`. Сообщение в топике должно содержать число, например `1240`.
-3. Откройте `esp32c3-ili9341-inverter-power.ino` в Arduino IDE и прошейте плату.
+The [sketch](./examples/esp32c3-ili9341-inverter-power/) for an ESP32-C3 Super Mini and an ILI9341 receives inverter power in watts over MQTT, picks the gauge range automatically and shows the current value in large digits.
 
-Файл `secrets.h` внесён в `.gitignore`, а CI падает, если такой файл попадёт в репозиторий. Поэтому пароли от сети не окажутся на GitHub. Для предпросмотра в PixelForge загрузите `.ino` через **«Загрузить код» → «Загрузить файл»**.
+1. Copy `secrets.example.h` to `secrets.h` in the same folder.
+2. Fill in Wi-Fi, the MQTT broker address, username and password, and the `POWER_TOPIC` topic in `secrets.h`. The topic payload must be a number, for example `1240`.
+3. Open `esp32c3-ili9341-inverter-power.ino` in the Arduino IDE and flash the board.
 
-## Хранение данных и безопасность
+`secrets.h` is listed in `.gitignore`, and CI fails if such a file is committed, so your network passwords never end up on GitHub. To preview the sketch in PixelForge, load the `.ino` with **Import code → Upload file**.
 
-- Аккаунты и проекты хранятся в SQLite: `data/pixelforge.sqlite`, права доступа `0600`. Старый `data/accounts.json` автоматически импортируется при первом запуске и остаётся резервной копией.
-- Пароли хешируются через scrypt с солью, сессии хранятся только в виде хеша. Cookie: `HttpOnly`, `SameSite=Strict`.
-- Есть ограничение частоты попыток входа, проверка Origin для изменяющих запросов, заголовки CSP / X-Frame-Options / nosniff и защита от path traversal.
-- При смене пароля все остальные сессии завершаются.
-- Это не облачный сервис: данные принадлежат серверу, на котором запущено приложение. Если сервер доступен из интернета, используйте HTTPS (через reverse proxy с `PIXELFORGE_TRUST_PROXY=1`) и делайте резервные копии каталога данных.
+## Data storage and security
 
-## Горячие клавиши
+- Accounts and projects are stored in SQLite: `data/pixelforge.sqlite`, file mode `0600`. A legacy `data/accounts.json` is imported automatically on first start and kept as a backup.
+- Passwords are hashed with salted scrypt; sessions are stored only as hashes. Cookies are `HttpOnly` and `SameSite=Strict`.
+- Sign-in attempts are rate limited, state-changing requests are Origin-checked, CSP / X-Frame-Options / nosniff headers are set and path traversal is blocked.
+- Changing your password ends all other sessions.
+- This is not a hosted cloud service: the data belongs to the server the app runs on. If the server is reachable from the internet, use HTTPS (through a reverse proxy with `PIXELFORGE_TRUST_PROXY=1`) and back up the data directory.
 
-| Действие | Windows / Linux | macOS |
+## Keyboard shortcuts
+
+| Action | Windows / Linux | macOS |
 |---|---|---|
-| Отменить / повторить | `Ctrl+Z` / `Ctrl+Y` | `Cmd+Z` / `Cmd+Shift+Z` |
-| Копировать / вставить / дублировать элемент | `Ctrl+C` / `Ctrl+V` / `Ctrl+D` | `Cmd+C` / `Cmd+V` / `Cmd+D` |
-| Сдвинуть элемент на 1 / 10 px | `←↑→↓` / `Shift+←↑→↓` | то же |
-| Удалить элемент | `Delete` / `Backspace` | то же |
-| Снять выделение / закрыть окно | `Esc` | `Esc` |
-| Поиск дисплея | `Ctrl+K` | `Cmd+K` |
-| Масштабировать холст | `Ctrl` + колёсико мыши | `Cmd` + колёсико мыши |
+| Undo / redo | `Ctrl+Z` / `Ctrl+Y` | `Cmd+Z` / `Cmd+Shift+Z` |
+| Copy / paste / duplicate element | `Ctrl+C` / `Ctrl+V` / `Ctrl+D` | `Cmd+C` / `Cmd+V` / `Cmd+D` |
+| Nudge element by 1 / 10 px | `←↑→↓` / `Shift+←↑→↓` | same |
+| Delete element | `Delete` / `Backspace` | same |
+| Deselect / close dialog | `Esc` | `Esc` |
+| Search displays | `Ctrl+K` | `Cmd+K` |
+| Zoom canvas | `Ctrl` + mouse wheel | `Cmd` + mouse wheel |
 
-Поля ввода сохраняют стандартное поведение клавиш.
+Input fields keep their standard key behavior.
 
-## Лицензия
+## License
 
-Лицензия пока не выбрана.
+[MIT](LICENSE) © 2026 ZeroDaylight0

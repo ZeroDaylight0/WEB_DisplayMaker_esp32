@@ -32,8 +32,8 @@ export const displays: DisplayPreset[] = [
 ]
 
 export const initialElements = [
-  { id: 'header', kind: 'text', name: 'Заголовок', x: 8, y: 8, width: 100, height: 16, text: 'WEATHER', fill: '#e7e7e7', stroke: 'none', radius: 0, fontSize: 9, fontFamily: 'monospace', fontWeight: 'bold' },
-  { id: 'frame', kind: 'rect', name: 'Карточка', x: 7, y: 23, width: 114, height: 32, text: '', fill: '#21251f', stroke: '#454a3f', radius: 5, fontSize: 12, fontFamily: 'monospace', fontWeight: 'normal' },
-  { id: 'temperature', kind: 'text', name: 'Температура', x: 13, y: 30, width: 95, height: 20, text: '24°', fill: '#c3f36b', stroke: 'none', radius: 0, fontSize: 21, fontFamily: 'monospace', fontWeight: 'bold' },
-  { id: 'status', kind: 'text', name: 'Статус', x: 75, y: 43, width: 42, height: 10, text: 'SUNNY', fill: '#a7ad9b', stroke: 'none', radius: 0, fontSize: 7, fontFamily: 'monospace', fontWeight: 'normal' },
+  { id: 'header', kind: 'text', name: 'Header', x: 8, y: 8, width: 100, height: 16, text: 'WEATHER', fill: '#e7e7e7', stroke: 'none', radius: 0, fontSize: 9, fontFamily: 'monospace', fontWeight: 'bold' },
+  { id: 'frame', kind: 'rect', name: 'Card', x: 7, y: 23, width: 114, height: 32, text: '', fill: '#21251f', stroke: '#454a3f', radius: 5, fontSize: 12, fontFamily: 'monospace', fontWeight: 'normal' },
+  { id: 'temperature', kind: 'text', name: 'Temperature', x: 13, y: 30, width: 95, height: 20, text: '24°', fill: '#c3f36b', stroke: 'none', radius: 0, fontSize: 21, fontFamily: 'monospace', fontWeight: 'bold' },
+  { id: 'status', kind: 'text', name: 'Status', x: 75, y: 43, width: 42, height: 10, text: 'SUNNY', fill: '#a7ad9b', stroke: 'none', radius: 0, fontSize: 7, fontFamily: 'monospace', fontWeight: 'normal' },
 ] as const

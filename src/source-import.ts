@@ -146,7 +146,7 @@ function formatSourcePreview(format: string, args: string[], source: string) {
     const type = token[token.length - 1]
     if (type === 's' || type === 'p') {
       const id = argument.match(/\bid\(\s*([A-Za-z_]\w*)\s*\)/)?.[1] ?? argument.match(/^[A-Za-z_]\w*$/)?.[0]
-      return id ? sourceStringSample(id, source) ?? (/status|message|msg/i.test(id) ? 'Сообщение' : '…') : '…'
+      return id ? sourceStringSample(id, source) ?? (/status|message|msg/i.test(id) ? 'Message' : '…') : '…'
     }
     const number = sourceNumber(argument, source)
     if (number === undefined) return '0'
@@ -225,7 +225,7 @@ function previewDynamicText(argument: string, source: string) {
     if (/volt/.test(lower)) return '3.3V'
     if (/time|hour|clock/.test(lower)) return '12:00'
     if (/date/.test(lower)) return '2026-10-15'
-    if (/status|message|msg/i.test(lower)) return 'Сообщение'
+    if (/status|message|msg/i.test(lower)) return 'Message'
     if (/ip\b/.test(lower)) return '192.168.1.100'
     return identifier
   }
@@ -538,7 +538,7 @@ function conditionalGroups(source: string, calls: Call[]): ConditionalGroup[] {
       cursor = branchClose + 1
     }
     const hasFinalElse = branches.at(-1)?.label === 'else'
-    if (!hasFinalElse) branches.push({ start: cursor, end: cursor, label: 'ни одно условие не выполнено' })
+    if (!hasFinalElse) branches.push({ start: cursor, end: cursor, label: 'no condition matched' })
     const id = `branch-${start}`
     const counts = branches.map((branch) => calls.filter((call) => call.start >= branch.start && call.start < branch.end).length)
     if (!counts.some((count) => count > 0)) continue
@@ -1007,7 +1007,7 @@ function makeImportedElement(index: number, kind: CanvasElement['kind'], values:
   return {
     id: `import-${index}`,
     kind,
-    name: kind === 'text' ? `Текст ${index + 1}` : kind === 'rect' ? `Блок ${index + 1}` : kind === 'circle' ? `Круг ${index + 1}` : kind === 'image' ? `Изображение ${index + 1}` : 'Линия',
+    name: kind === 'text' ? `Text ${index + 1}` : kind === 'rect' ? `Box ${index + 1}` : kind === 'circle' ? `Circle ${index + 1}` : kind === 'image' ? `Image ${index + 1}` : 'Line',
     x: 0, y: 0, width: 20, height: 12, text: '', fill: '#ffffff', stroke: '#ffffff', radius: 0,
     fontSize: 12, fontFamily: 'monospace', fontWeight: 'normal',
     ...values,
@@ -1515,10 +1515,10 @@ export function parseDisplaySource(source: string, requestedFormat?: SourceForma
   }
   const displayVariables = new Set(elements.flatMap((element) => element.dynamicVariables ?? []))
   const sourceTopics = detectedSourceTopics.filter(({ id }) => displayVariables.has(id))
-  if (!elements.length) warnings.push('Не удалось распознать поддерживаемые команды рисования. Исходник останется без изменений.')
-  if (unsupported) warnings.push(`${unsupported} команда(ы) или динамическое выражение не распознаны и останутся в исходнике без изменений.`)
-  if (branches.length) warnings.push('Условные ветки можно переключать в панели над экраном; в превью активна ветка с наибольшим числом команд рисования.')
-  warnings.push('Импорт меняет только распознанные команды рисования. Инициализация драйвера, распиновка, периферия и логика программы сохраняются как в исходнике.')
+  if (!elements.length) warnings.push('No supported drawing commands were recognized. The source will stay unchanged.')
+  if (unsupported) warnings.push(`${unsupported} command(s) or dynamic expression(s) were not recognized and will stay unchanged in the source.`)
+  if (branches.length) warnings.push('Conditional branches can be switched in the panel above the screen; the preview shows the branch with the most drawing commands.')
+  warnings.push('Import changes only recognized drawing commands. Driver initialization, pinout, peripherals and program logic stay as in the source.')
   return { format, elements, mappings, renderer, suggestedDisplayId, suggestedSize, sourceTopics, sourceBranchGroups, sourceBranchSelection, warnings }
 }
 

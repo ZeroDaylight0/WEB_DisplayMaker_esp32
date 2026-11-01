@@ -308,8 +308,8 @@ button:disabled { cursor: not-allowed !important; opacity: .38; }
   .topbar .account-action span { display: none; }
   .topbar .save-web-button { width: 31px; height: 31px; min-height: 31px; padding: 0; font-size: 0; }
   .topbar .save-web-button svg { width: 16px; height: 16px; }
-  .topbar .top-action[title="Загрузить готовый код"] { display: inline-flex !important; width: 31px; height: 31px; padding: 0; justify-content: center; }
-  .topbar .top-action[title="Загрузить готовый код"] span { display: none; }
+  .topbar .top-action[title="Import existing code"] { display: inline-flex !important; width: 31px; height: 31px; padding: 0; justify-content: center; }
+  .topbar .top-action[title="Import existing code"] span { display: none; }
   .topbar .button-primary { margin-left: auto; min-height: 31px; font-size: 9px; padding: 0 8px; }
   .workspace { grid-template-columns: 1fr; }
   .left-sidebar { position: absolute; z-index: 3; bottom: 55px; left: 8px; width: 190px; max-height: 38vh; border: 1px solid #36373b; border-radius: 7px; box-shadow: 0 8px 28px #0009; }

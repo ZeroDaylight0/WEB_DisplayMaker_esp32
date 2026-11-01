@@ -1,6 +1,7 @@
 {
   "name": "pixelforge-display-editor",
   "private": true,
+  "license": "MIT",
   "version": "1.1.0",
   "description": "Visual display editor and code generator for ESP32/Arduino and ESPHome",
   "repository": {

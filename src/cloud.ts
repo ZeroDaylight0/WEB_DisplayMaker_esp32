@@ -31,7 +31,7 @@ async function request(path: string, options: RequestInit = {}): Promise<ApiResp
     payload = await response.json() as ApiResponse
   } catch {
     // A reverse proxy or a stopped API server returns HTML instead of JSON.
-    throw new Error(response.ok ? 'Сервер вернул неожиданный ответ' : `Сервер недоступен (${response.status})`)
+    throw new Error(response.ok ? 'The server returned an unexpected response' : `Server unavailable (${response.status})`)
   }
   if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`)
   return payload
