@@ -1,0 +1,14 @@
+services:
+  pixelforge:
+    build: .
+    ports:
+      - "4173:4173"
+    environment:
+      # Set to "0" after creating your account to block new sign-ups.
+      PIXELFORGE_ALLOW_REGISTRATION: "1"
+    volumes:
+      - pixelforge-data:/data
+    restart: unless-stopped
+
+volumes:
+  pixelforge-data:

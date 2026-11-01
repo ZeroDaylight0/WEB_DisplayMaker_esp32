@@ -39,7 +39,7 @@ describe('display code generation', () => {
   it('generates an ESPHome lambda with valid indentation for a custom ST7789 size', () => {
     const code = generateCode('esphome', project, displays.find((display) => display.id === 'st7789-240x240')!)
     expect(code).toContain('  - platform: mipi_spi\n    model: ST7789V\n    dimensions:\n      width: 240\n      height: 240')
-    expect(code).toContain('    lambda: |-\n        it.printf(4, 8, id(font_small), Color(195, 243, 107), TextAlign::TOP_LEFT, "Room \\"A\\"");')
+    expect(code).toContain('    lambda: |-\n        it.printf(4, 8, id(font_12), Color(195, 243, 107), TextAlign::TOP_LEFT, "Room \\"A\\"");')
   })
 
   it('escapes printf format markers in static ESPHome text', () => {
@@ -90,5 +90,42 @@ describe('display code generation', () => {
   it('returns no ESPHome code for an unsupported controller template', () => {
     const display = displays.find((item) => item.id === 'ssd1331-96x64')!
     expect(generateCode('esphome', project, display)).toBeNull()
+  })
+
+  it('draws outline-only shapes with frame commands', () => {
+    const rect: CanvasElement = { ...text, id: 'box', kind: 'rect', text: '', fill: 'none', stroke: '#ff0000', radius: 3 }
+    const circle: CanvasElement = { ...rect, id: 'ring', kind: 'circle', width: 10, height: 10 }
+    const outlined = { ...project, elements: [rect, circle] }
+    const u8g2 = generateCode('arduino', outlined, displays.find((item) => item.id === 'ssd1306-128x64')!)
+    expect(u8g2).toContain('u8g2.drawRFrame(4, 8, 40, 12, 3);')
+    expect(u8g2).toContain('u8g2.drawCircle(')
+    const gfx = generateCode('arduino', outlined, displays.find((item) => item.id === 'ili9341-240x320')!)
+    expect(gfx).toContain('gfx->drawRoundRect(4, 8, 40, 12, 3, 0xF800);')
+    expect(gfx).toContain('gfx->drawCircle(9, 13, 5, 0xF800);')
+    const esphome = generateCode('esphome', outlined, displays.find((item) => item.id === 'ili9341-240x320')!)
+    expect(esphome).toContain('it.rectangle(4, 8, 40, 12, Color(255, 0, 0));')
+    expect(esphome).toContain('it.circle(9, 13, 5, Color(255, 0, 0));')
+  })
+
+  it('uses UTF-8 capable fonts for Cyrillic text', () => {
+    const cyrillic = { ...project, elements: [{ ...text, text: 'Привет' }] }
+    const u8g2 = generateCode('arduino', cyrillic, displays.find((item) => item.id === 'ssd1306-128x64')!)
+    expect(u8g2).toContain('u8g2.setFont(u8g2_font_6x13_t_cyrillic);')
+    expect(u8g2).toContain('u8g2.drawUTF8(4, 20, "Привет");')
+    const esphome = generateCode('esphome', cyrillic, displays.find((item) => item.id === 'st7789-240x240')!)
+    expect(esphome).toContain('GF_Cyrillic_Core')
+  })
+
+  it('declares one ESPHome font per text size', () => {
+    const sized = { ...project, elements: [text, { ...text, id: 'big', fontSize: 24 }] }
+    const code = generateCode('esphome', sized, displays.find((item) => item.id === 'st7789-240x240')!)
+    expect(code).toContain('id: font_12\n    size: 12')
+    expect(code).toContain('id: font_24\n    size: 24')
+    expect(code).toContain('id(font_24)')
+  })
+
+  it('passes CS/DC/reset pins to U8g2 hardware SPI constructors', () => {
+    const code = generateCode('arduino', project, displays.find((item) => item.id === 'ssd1309-128x64')!)
+    expect(code).toContain('u8g2(U8G2_R0, /* cs=*/ 5, /* dc=*/ 16, /* reset=*/ 17);')
   })
 })

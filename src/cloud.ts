@@ -26,9 +26,24 @@ async function request(path: string, options: RequestInit = {}): Promise<ApiResp
       ...options.headers,
     },
   })
-  const payload = await response.json() as ApiResponse
+  let payload: ApiResponse
+  try {
+    payload = await response.json() as ApiResponse
+  } catch {
+    // A reverse proxy or a stopped API server returns HTML instead of JSON.
+    throw new Error(response.ok ? 'Сервер вернул неожиданный ответ' : `Сервер недоступен (${response.status})`)
+  }
   if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`)
   return payload
+}
+
+export async function getServerConfig(): Promise<{ allowRegistration: boolean }> {
+  const payload = await request('/api/config') as ApiResponse & { allowRegistration?: boolean }
+  return { allowRegistration: payload.allowRegistration !== false }
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  await request('/api/auth/password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) })
 }
 
 export async function getCurrentUser(): Promise<AccountUser | null> {

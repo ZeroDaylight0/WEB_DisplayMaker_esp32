@@ -346,3 +346,6 @@ button:disabled { cursor: not-allowed !important; opacity: .38; }
   .modal-footer > div { margin-left: auto; }
   .modal-footer .button { font-size: 9px; padding: 0 8px; }
 }
+.outline-toggle { padding-top: 0; margin: -2px 0 10px; }
+.password-form { margin: 0 0 14px; }
+.password-form .custom-actions { margin-top: 4px; }

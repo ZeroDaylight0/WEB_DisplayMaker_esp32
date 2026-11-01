@@ -6,8 +6,8 @@
     - Arduino_GFX_Library
     - PubSubClient
 
-  Install/select the ESP32 Arduino core by Espressif. Set Wi-Fi and MQTT
-  credentials below. MQTT is expected to be reachable from this device.
+  Install/select the ESP32 Arduino core by Espressif. Copy secrets.example.h
+  to secrets.h and set your Wi-Fi and MQTT settings there.
 
   Common ESP32-C3 Super Mini wiring:
     TFT SCK  -> GPIO 4
@@ -20,9 +20,8 @@
     TFT GND  -> GND
     TFT LED  -> 3V3 (backlight always on)
 
-  The MQTT topic below is the topic provided by the user. If it is a
-  Home Assistant entity_id rather than a broker topic, publish the sensor
-  value to this topic from Home Assistant or change POWER_TOPIC accordingly.
+  POWER_TOPIC must be an MQTT broker topic carrying the power in watts. If you
+  only have a Home Assistant entity, publish its state to a topic first.
 */
 
 #include <Arduino_GFX_Library.h>
@@ -32,15 +31,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-// ---- Fill these in for your network and MQTT broker ----
-const char *WIFI_SSID = "YOUR_WIFI_NAME";
-const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-const char *MQTT_HOST = "192.168.1.10";
-constexpr uint16_t MQTT_PORT = 1883;
-const char *MQTT_USER = "";
-const char *MQTT_PASSWORD = "";
-const char *POWER_TOPIC =
-  "voltsinurproultraplus/DEV1A12C47CBD4876E/STATE_INVERTOR/output_active_power_w";
+// ---- Wi-Fi / MQTT settings ----
+// Real values live in secrets.h (ignored by git). Copy secrets.example.h to secrets.h and edit it.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#warning "secrets.h not found: using placeholder settings from secrets.example.h"
+#include "secrets.example.h"
+#endif
 
 // ---- SPI pins for a common ESP32-C3 Super Mini ----
 constexpr int8_t TFT_SCK = 4;
@@ -177,20 +175,24 @@ void drawScale(float maximum) {
   }
 }
 
+void drawStatus(bool online) {
+  gfx->fillCircle(218, 17, 4, online ? C_GREEN : C_RED);
+}
+
 void drawStaticScreen(float maximum) {
   gfx->fillScreen(C_BG);
-  gfx->fillRoundRect(8, 8, 224, 304, 18, C_PANEL);
+  gfx->fillRoundRect(1, 1, 238, 316, 18, C_PANEL);
   gfx->drawRoundRect(8, 8, 224, 304, 18, C_PANEL_EDGE);
 
   gfx->setTextSize(1);
   gfx->setTextColor(C_CYAN);
-  gfx->setCursor(22, 20);
+  gfx->setCursor(22, 13);
   gfx->print("INVERTER  /  LIVE");
-  gfx->setTextSize(2);
+  gfx->setTextSize(1);
   gfx->setTextColor(C_WHITE);
-  gfx->setCursor(22, 38);
+  gfx->setCursor(84, 26);
   gfx->print("OUTPUT POWER");
-  gfx->drawFastHLine(22, 61, 196, C_PANEL_EDGE);
+  gfx->drawFastHLine(22, 44, 196, C_PANEL_EDGE);
 
   drawScale(maximum);
 
@@ -198,19 +200,19 @@ void drawStaticScreen(float maximum) {
   gfx->drawCircle(GAUGE_X, GAUGE_Y, 42, C_PANEL_EDGE);
   gfx->setTextSize(1);
   gfx->setTextColor(C_MUTED);
-  gfx->setCursor(94, 125);
+  gfx->setCursor(111, 128);
   gfx->print("POWER");
 
   gfx->fillRoundRect(20, 238, 200, 61, 12, C_BG);
   gfx->drawRoundRect(20, 238, 200, 61, 12, C_PANEL_EDGE);
   gfx->setTextSize(1);
   gfx->setTextColor(C_MUTED);
-  gfx->setCursor(35, 249);
+  gfx->setCursor(96, 244);
   gfx->print("ACTIVE LOAD");
-  gfx->fillRoundRect(35, 286, 170, 5, 2, C_TRACK);
+  drawStatus(lastDrawnOnline);
 }
 
-void drawReadouts(float watts, float maximum, bool online) {
+void drawReadouts(float watts, float maximum) {
   const float ratio = constrain(watts / maximum, 0.0f, 1.0f);
   const float endDeg = GAUGE_START_DEG + GAUGE_SWEEP_DEG * ratio;
   const uint16_t activeColor = colorForRatio(ratio);
@@ -221,18 +223,18 @@ void drawReadouts(float watts, float maximum, bool online) {
   gfx->fillCircle(GAUGE_X, GAUGE_Y, 39, C_PANEL);
   gfx->setTextSize(1);
   gfx->setTextColor(C_MUTED);
-  gfx->setCursor(96, 133);
-  gfx->print("OUTPUT");
+  gfx->setCursor(111, 128);
+  gfx->print("POWER");
   gfx->setTextSize(3);
   gfx->setTextColor(C_WHITE);
   char gaugeText[8];
   if (watts >= 10000.0f) snprintf(gaugeText, sizeof(gaugeText), "%luk", static_cast<unsigned long>(watts / 1000.0f));
   else snprintf(gaugeText, sizeof(gaugeText), "%lu", static_cast<unsigned long>(watts));
   const int16_t gaugeWidth = strlen(gaugeText) * 18;
-  gfx->setCursor((SCREEN_W - gaugeWidth) / 2, 148);
+  gfx->setCursor((SCREEN_W - gaugeWidth) / 2, 140);
   gfx->print(gaugeText);
 
-  gfx->fillRect(30, 261, 180, 22, C_BG);
+  gfx->fillRect(30, 255, 180, 30, C_BG);
   gfx->setTextSize(4);
   gfx->setTextColor(activeColor);
   char valueText[16];
@@ -245,18 +247,8 @@ void drawReadouts(float watts, float maximum, bool online) {
     snprintf(valueText, sizeof(valueText), "%lu W", static_cast<unsigned long>(watts));
   }
   const int16_t valueWidth = strlen(valueText) * 24;
-  gfx->setCursor((SCREEN_W - valueWidth) / 2, 263);
+  gfx->setCursor((SCREEN_W - valueWidth) / 2, 256);
   gfx->print(valueText);
-
-  gfx->fillRoundRect(35, 286, 170, 5, 2, C_TRACK);
-  const uint16_t barWidth = static_cast<uint16_t>(ratio * 170.0f);
-  if (barWidth > 0) gfx->fillRoundRect(35, 286, barWidth, 5, 2, activeColor);
-
-  gfx->fillCircle(36, 302, 3, online ? C_GREEN : C_RED);
-  gfx->setTextSize(1);
-  gfx->setTextColor(online ? C_GREEN : C_RED);
-  gfx->setCursor(44, 299);
-  gfx->print(online ? "MQTT CONNECTED" : "WAITING FOR MQTT");
 }
 
 void onMqttMessage(char *topic, byte *payload, unsigned int length) {
@@ -300,17 +292,17 @@ void connectMqtt() {
 
 void drawPreviewSample() {
   gfx->fillScreen(0x0841);
-  gfx->fillRoundRect(8, 8, 224, 304, 18, 0x10A3);
+  gfx->fillRoundRect(1, 1, 238, 316, 18, 0x10A3);
   gfx->drawRoundRect(8, 8, 224, 304, 18, 0x2145);
   gfx->setTextSize(1);
   gfx->setTextColor(0x05FF);
-  gfx->setCursor(22, 20);
+  gfx->setCursor(22, 13);
   gfx->print("INVERTER  /  LIVE");
-  gfx->setTextSize(2);
+  gfx->setTextSize(1);
   gfx->setTextColor(0xFFFF);
-  gfx->setCursor(22, 38);
+  gfx->setCursor(84, 26);
   gfx->print("OUTPUT POWER");
-  gfx->drawFastHLine(22, 61, 196, 0x2145);
+  gfx->drawFastHLine(22, 44, 196, 0x2145);
   gfx->drawCircle(120, 150, 86, 0x2949);
   gfx->drawCircle(120, 150, 79, 0x2949);
   gfx->drawLine(59, 211, 50, 200, 0x05FF);
@@ -340,29 +332,23 @@ void drawPreviewSample() {
   gfx->drawCircle(120, 150, 42, 0x2145);
   gfx->setTextSize(1);
   gfx->setTextColor(0x9CF3);
-  gfx->setCursor(94, 125);
+  gfx->setCursor(111, 128);
   gfx->print("POWER");
   gfx->setTextSize(3);
   gfx->setTextColor(0xFFFF);
-  gfx->setCursor(85, 148);
+  gfx->setCursor(84, 140);
   gfx->print("1240");
   gfx->fillRoundRect(20, 238, 200, 61, 12, 0x0841);
   gfx->drawRoundRect(20, 238, 200, 61, 12, 0x2145);
   gfx->setTextSize(1);
   gfx->setTextColor(0x9CF3);
-  gfx->setCursor(35, 249);
+  gfx->setCursor(96, 244);
   gfx->print("ACTIVE LOAD");
   gfx->setTextSize(4);
   gfx->setTextColor(0xFD20);
-  gfx->setCursor(52, 263);
+  gfx->setCursor(48, 256);
   gfx->print("1240 W");
-  gfx->fillRoundRect(35, 286, 170, 5, 2, 0x2949);
-  gfx->fillRoundRect(35, 286, 102, 5, 2, 0xFD20);
-  gfx->fillCircle(36, 302, 3, 0x07E0);
-  gfx->setTextSize(1);
-  gfx->setTextColor(0x07E0);
-  gfx->setCursor(44, 299);
-  gfx->print("MQTT CONNECTED");
+  gfx->fillCircle(218, 17, 4, 0x07E0);
 }
 
 void setup() {
@@ -373,7 +359,7 @@ void setup() {
   }
   gfx->setRotation(0);
   drawStaticScreen(rangeMaxW);
-  drawReadouts(0, rangeMaxW, false);
+  drawReadouts(0, rangeMaxW);
 
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(onMqttMessage);
@@ -394,7 +380,8 @@ void loop() {
     if (havePower) displayPowerW += (powerW - displayPowerW) * 0.28f;
     const bool valueMoving = havePower && fabsf(displayPowerW - powerW) > 1.0f;
     if (needsRedraw || online != lastDrawnOnline || valueMoving) {
-      drawReadouts(displayPowerW, rangeMaxW, online);
+      drawReadouts(displayPowerW, rangeMaxW);
+      if (online != lastDrawnOnline) drawStatus(online);
       lastDrawnOnline = online;
     }
     lastScreenUpdateMs = now;

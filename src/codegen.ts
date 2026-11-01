@@ -7,6 +7,10 @@ const cppString = (value: string) => `"${value.replace(/\\/g, '\\\\').replace(/"
 const yamlString = (value: string) => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, '\\n').replace(/%/g, '%%')}"`
 const commentText = (value: string) => value.replace(/[\r\n]+/g, ' ').replace(/\*\//g, '* /')
 const n = (value: number) => Math.round(value)
+const isAscii = (value: string) => /^[\x20-\x7e]*$/.test(value)
+const outlineOnly = (element: CanvasElement) => element.fill === 'none' || element.fill === 'transparent'
+const shapeColor = (element: CanvasElement) => outlineOnly(element) ? element.stroke : element.fill
+const fontId = (size: number) => `font_${Math.max(5, Math.round(size))}`
 const esphomeColor = (value: string, display: DisplayPreset) => {
   if (!display.color) return 'Color::WHITE'
   const hexValue = Number.parseInt(hex(value), 16)
@@ -25,33 +29,49 @@ function arduinoElement(element: CanvasElement, display: DisplayPreset) {
 
   if (element.kind === 'text') {
     if (display.library === 'u8g2') {
+      if (!isAscii(element.text)) {
+        // Non-ASCII text (e.g. Cyrillic) needs drawUTF8 and a font that contains those glyphs.
+        const font = element.fontSize >= 14 ? 'u8g2_font_10x20_t_cyrillic' : element.fontSize >= 10 ? 'u8g2_font_6x13_t_cyrillic' : 'u8g2_font_5x7_t_cyrillic'
+        return `  u8g2.setFont(${font});\n  u8g2.drawUTF8(${x}, ${y + element.fontSize}, ${cppString(element.text)});`
+      }
       const font = element.fontSize >= 14 ? 'u8g2_font_helvB14_tr' : element.fontSize >= 10 ? 'u8g2_font_6x10_tr' : 'u8g2_font_5x7_tr'
       return `  u8g2.setFont(${font});\n  u8g2.drawStr(${x}, ${y + element.fontSize}, ${cppString(element.text)});`
     }
     return `  gfx->setTextSize(${Math.max(1, Math.round(element.fontSize / 8))});\n  gfx->setTextColor(${rgb565(element.fill)});\n  gfx->setCursor(${x}, ${y});\n  gfx->print(${cppString(element.text)});`
   }
   if (element.kind === 'image') return `  // Imported image "${commentText(element.name)}" is not converted to a bitmap by this generator.`
-  const color = display.library === 'u8g2' ? '1' : rgb565(element.fill)
+  const outline = outlineOnly(element)
   if (element.kind === 'rect') {
-    return display.library === 'u8g2'
-      ? `  u8g2.drawRBox(${x}, ${y}, ${w}, ${h}, ${Math.min(4, element.radius)});`
-      : `  gfx->fillRoundRect(${x}, ${y}, ${w}, ${h}, ${element.radius}, ${color});`
+    if (display.library === 'u8g2') {
+      // U8g2 requires the corner radius to fit inside the box, otherwise the drawing breaks.
+      const radius = Math.max(0, Math.min(n(element.radius), Math.floor((Math.min(w, h) - 2) / 2)))
+      return outline ? `  u8g2.drawRFrame(${x}, ${y}, ${w}, ${h}, ${radius});` : `  u8g2.drawRBox(${x}, ${y}, ${w}, ${h}, ${radius});`
+    }
+    return outline
+      ? `  gfx->drawRoundRect(${x}, ${y}, ${w}, ${h}, ${n(element.radius)}, ${rgb565(element.stroke)});`
+      : `  gfx->fillRoundRect(${x}, ${y}, ${w}, ${h}, ${n(element.radius)}, ${rgb565(element.fill)});`
   }
   if (element.kind === 'circle') {
     const radius = Math.max(1, Math.min(w, h) / 2)
-    return display.library === 'u8g2'
-      ? `  u8g2.drawDisc(${n(x + radius)}, ${n(y + radius)}, ${n(radius)});`
-      : `  gfx->fillCircle(${n(x + radius)}, ${n(y + radius)}, ${n(radius)}, ${color});`
+    if (display.library === 'u8g2') {
+      return `  u8g2.${outline ? 'drawCircle' : 'drawDisc'}(${n(x + radius)}, ${n(y + radius)}, ${n(radius)});`
+    }
+    return `  gfx->${outline ? 'drawCircle' : 'fillCircle'}(${n(x + radius)}, ${n(y + radius)}, ${n(radius)}, ${rgb565(shapeColor(element))});`
   }
   return display.library === 'u8g2'
     ? `  u8g2.drawLine(${x}, ${y}, ${x + w}, ${y + h});`
-    : `  gfx->drawLine(${x}, ${y}, ${x + w}, ${y + h}, ${color});`
+    : `  gfx->drawLine(${x}, ${y}, ${x + w}, ${y + h}, ${rgb565(element.stroke)});`
+}
+
+function u8g2Args(constructor: string) {
+  if (/_4W_HW_SPI$/.test(constructor)) return 'U8G2_R0, /* cs=*/ 5, /* dc=*/ 16, /* reset=*/ 17'
+  return 'U8G2_R0, /* reset=*/ U8X8_PIN_NONE'
 }
 
 function arduinoCode(project: Project, display: DisplayPreset) {
   const body = project.elements.map((element) => arduinoElement(element, display)).join('\n')
   if (display.library === 'u8g2' && display.u8g2Constructor) {
-    return `// PixelForge · ${commentText(display.controller)} · ${display.width}×${display.height}\n// Install the U8g2 library from the Arduino Library Manager.\n#include <U8g2lib.h>\n\n${display.u8g2Constructor} u8g2(U8G2_R0, U8X8_PIN_NONE);\n\nvoid setup() {\n  u8g2.begin();\n}\n\nvoid loop() {\n  u8g2.clearBuffer();\n${body}\n  u8g2.sendBuffer();\n  delay(100);\n}`
+    return `// PixelForge · ${commentText(display.controller)} · ${display.width}×${display.height}\n// Install the U8g2 library from the Arduino Library Manager.\n#include <U8g2lib.h>\n\n${display.u8g2Constructor} u8g2(${u8g2Args(display.u8g2Constructor)});\n\nvoid setup() {\n  u8g2.begin();\n}\n\nvoid loop() {\n  u8g2.clearBuffer();\n${body}\n  u8g2.sendBuffer();\n  delay(100);\n}`
   }
   if (display.library === 'arduino-gfx' && display.gfxDriver) {
     const pins = display.boardPins ?? { sck: 18, mosi: 23, cs: 5, dc: 2, reset: 4 }
@@ -74,16 +94,16 @@ function esphomeElement(element: CanvasElement, display: DisplayPreset) {
   const w = n(element.width)
   const h = n(element.height)
   if (element.kind === 'text') {
-    return `  it.printf(${x}, ${y}, id(font_small), ${esphomeColor(element.fill, display)}, TextAlign::TOP_LEFT, ${yamlString(element.text)});`
+    return `  it.printf(${x}, ${y}, id(${fontId(element.fontSize)}), ${esphomeColor(element.fill, display)}, TextAlign::TOP_LEFT, ${yamlString(element.text)});`
   }
   if (element.kind === 'image') return `  // Imported image "${commentText(element.name)}" is not converted to a bitmap by this generator.`
   if (element.kind === 'rect') {
-    if (element.fill === 'none') return `  it.rectangle(${x}, ${y}, ${w}, ${h}, ${esphomeColor(element.stroke, display)});`
+    if (outlineOnly(element)) return `  it.rectangle(${x}, ${y}, ${w}, ${h}, ${esphomeColor(element.stroke, display)});`
     return `  it.filled_rectangle(${x}, ${y}, ${w}, ${h}, ${esphomeColor(element.fill, display)});`
   }
   if (element.kind === 'circle') {
     const radius = n(Math.max(1, Math.min(w, h) / 2))
-    return `  it.filled_circle(${x + radius}, ${y + radius}, ${radius}, ${esphomeColor(element.fill, display)});`
+    return `  it.${outlineOnly(element) ? 'circle' : 'filled_circle'}(${x + radius}, ${y + radius}, ${radius}, ${esphomeColor(shapeColor(element), display)});`
   }
   return `  it.line(${x}, ${y}, ${x + w}, ${y + h}, ${esphomeColor(element.stroke, display)});`
 }
@@ -91,7 +111,11 @@ function esphomeElement(element: CanvasElement, display: DisplayPreset) {
 function esphomeCode(project: Project, display: DisplayPreset) {
   if (!display.esphomePlatform) return null
   const lines = project.elements.map((element) => esphomeElement(element, display)).join('\n')
-  const font = `font:\n  - file: "gfonts://Roboto Mono"\n    id: font_small\n    size: 12\n\n`
+  const texts = project.elements.filter((element) => element.kind === 'text')
+  const sizes = [...new Set(texts.length ? texts.map((element) => Math.max(5, Math.round(element.fontSize))) : [12])].sort((a, b) => a - b)
+  // Google Fonts ship only Latin glyphs by default; add Cyrillic when the layout needs it.
+  const glyphsets = texts.some((element) => !isAscii(element.text)) ? `    glyphsets:\n      - GF_Latin_Core\n      - GF_Cyrillic_Core\n` : ''
+  const font = `font:\n${sizes.map((size) => `  - file: "gfonts://Roboto Mono"\n    id: ${fontId(size)}\n    size: ${size}\n${glyphsets}`).join('')}\n`
   const lambda = `lambda: |-\n${(lines || '// Add elements to draw your screen.').split('\n').map((line) => `      ${line}`).join('\n')}`
   if (display.esphomePlatform === 'ssd1306_i2c' || display.esphomePlatform === 'ssd1327_i2c') {
     const address = display.esphomePlatform === 'ssd1327_i2c' ? '0x3D' : '0x3C'

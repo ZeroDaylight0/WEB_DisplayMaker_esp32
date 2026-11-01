@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: ${{ matrix.os }} · Node.js ${{ matrix.node-version }}
@@ -14,21 +17,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            node-version: '20.x'
-          - os: ubuntu-latest
-            node-version: '21.4.0'
-          - os: ubuntu-latest
-            node-version: '22.x'
-          - os: ubuntu-latest
-            node-version: '24.x'
-          - os: windows-latest
-            node-version: '20.x'
-          - os: windows-latest
-            node-version: '22.x'
-          - os: windows-latest
-            node-version: '24.x'
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: ['22.x', '24.x']
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -45,3 +35,47 @@ jobs:
         run: npm test
       - name: Test API
         run: npm run test:server
+
+  linux-scripts:
+    name: Linux start script & secrets check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - name: No credential files are tracked
+        run: |
+          if git ls-files | grep -E '(^|/)secrets\.h$|\.env$'; then
+            echo "A credentials file is committed. Remove it from git." >&2
+            exit 1
+          fi
+      - name: Shell scripts are valid
+        run: |
+          shellcheck start-linux.sh install-ubuntu-autostart.sh
+          test -x start-linux.sh && test -x install-ubuntu-autostart.sh
+      - name: start-linux.sh serves the editor
+        run: |
+          PORT=4199 ./start-linux.sh > server.log 2>&1 &
+          SERVER_PID=$!
+          for i in $(seq 1 90); do
+            curl -fsS http://127.0.0.1:4199/api/health && break
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:4199/ | grep -q '<div id="root">'
+          kill "$SERVER_PID" || true
+          cat server.log
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and smoke-test image
+        run: |
+          docker build -t pixelforge:ci .
+          docker run -d --name pf -p 4173:4173 pixelforge:ci
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4173/api/health && break; sleep 1; done
+          curl -fsS http://127.0.0.1:4173/ | grep -q '<div id="root">'
+          docker logs pf

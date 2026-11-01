@@ -1,10 +1,26 @@
 {
   "name": "pixelforge-display-editor",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.1.0",
+  "description": "Visual display editor and code generator for ESP32/Arduino and ESPHome",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZeroDaylight0/WEB_DisplayMaker_esp32.git"
+  },
+  "keywords": [
+    "esp32",
+    "arduino",
+    "esphome",
+    "display",
+    "oled",
+    "tft",
+    "u8g2",
+    "arduino-gfx",
+    "editor"
+  ],
   "type": "module",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "vite",
@@ -13,7 +29,13 @@
     "build": "node ./node_modules/typescript/bin/tsc && node ./node_modules/vite/bin/vite.js build",
     "test": "vitest run",
     "test:server": "node --test server-tests.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check": "npm run build && npm test && npm run test:server"
+  },
+  "dependencies": {
+    "lucide-react": "^1.57.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
@@ -21,13 +43,6 @@
     "@vitejs/plugin-react": "4.7.0",
     "typescript": "5.8.3",
     "vite": "6.4.5",
-    "vitest": "4.1.11"
-  },
-  "dependencies": {
-    "better-sqlite3": "9.6.0",
-    "lucide-react": "^1.57.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1"
-  },
-  "description": "Visual editor and code generator for microcontroller displays"
+    "vitest": "4.1.12"
+  }
 }

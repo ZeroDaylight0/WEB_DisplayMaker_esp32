@@ -1,7 +1,7 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash, scryptSync } from 'node:crypto'
-import Database from 'better-sqlite3'
+import { DatabaseSync } from 'node:sqlite'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -55,10 +55,11 @@ test('accounts authenticate and passwords are not returned', async () => {
   assert.deepEqual(body.user.username, 'artem')
   assert.equal('passwordHash' in body.user, false)
   assert.equal(response.headers.get('set-cookie').includes('HttpOnly'), true)
+  assert.equal(response.headers.get('set-cookie').includes('Secure'), false, 'plain HTTP must not get a Secure cookie')
 
   const cookie = response.headers.get('set-cookie').split(';')[0]
   const token = cookie.split('=')[1]
-  const database = new Database(join(dataDir, 'pixelforge.sqlite'), { readonly: true })
+  const database = new DatabaseSync(join(dataDir, 'pixelforge.sqlite'), { readOnly: true })
   const storedSession = database.prepare('SELECT tokenHash FROM sessions').get().tokenHash
   assert.notEqual(storedSession, token)
   assert.equal(storedSession, createHash('sha256').update(token).digest('hex'))
@@ -231,6 +232,85 @@ test('serves static files without allowing path traversal', async () => {
     assert.equal(traversal.status, 403)
     const malformedPath = await fetch(`${staticUrl}/%E0%A4%A`)
     assert.equal(malformedPath.status, 400)
+  } finally {
+    if (staticServer?.listening) await closeServer(staticServer)
+    await rm(fixtureDir, { recursive: true, force: true })
+  }
+})
+
+test('changes the password and signs out other sessions', async () => {
+  const register = await json('/api/auth/register', {
+    method: 'POST',
+    body: { username: 'changer', password: 'first-password-123' },
+  })
+  const cookie = register.response.headers.get('set-cookie').split(';')[0]
+  const other = await json('/api/auth/login', { method: 'POST', body: { username: 'changer', password: 'first-password-123' } })
+  const otherCookie = other.response.headers.get('set-cookie').split(';')[0]
+
+  const wrong = await json('/api/auth/password', { method: 'POST', cookie, body: { currentPassword: 'not-the-password', newPassword: 'second-password-123' } })
+  assert.equal(wrong.response.status, 401)
+  const changed = await json('/api/auth/password', { method: 'POST', cookie, body: { currentPassword: 'first-password-123', newPassword: 'second-password-123' } })
+  assert.equal(changed.response.status, 200)
+
+  assert.equal((await json('/api/auth/me', { cookie })).body.user.username, 'changer')
+  assert.equal((await json('/api/auth/me', { cookie: otherCookie })).body.user, null)
+  assert.equal((await json('/api/auth/login', { method: 'POST', body: { username: 'changer', password: 'first-password-123' } })).response.status, 401)
+  assert.equal((await json('/api/auth/login', { method: 'POST', body: { username: 'changer', password: 'second-password-123' } })).response.status, 200)
+})
+
+test('rejects malformed project ids and lists projects newest first', async () => {
+  const login = await json('/api/auth/login', { method: 'POST', body: { username: 'artem', password: 'secure-password-123' } })
+  const cookie = login.response.headers.get('set-cookie').split(';')[0]
+  assert.equal((await json('/api/projects/not-a-uuid', { cookie })).response.status, 404)
+  assert.equal((await json('/api/projects/00000000-0000-4000-8000-00000000ffff', { method: 'PUT', cookie, body: { project: { name: 'x' } } })).response.status, 404)
+  assert.equal((await json('/api/projects', { method: 'POST', cookie, body: { project: { name: '   ' } } })).response.status, 400)
+  await json('/api/projects', { method: 'POST', cookie, body: { project: { name: 'Newest' } } })
+  const list = await json('/api/projects', { cookie })
+  assert.equal(list.body.projects[0].name, 'Newest')
+})
+
+test('registration can be disabled and secure cookies can be forced', async () => {
+  const closedDir = await mkdtemp(join(tmpdir(), 'pixelforge-closed-test-'))
+  let closedServer
+  try {
+    closedServer = await createApiServer({ dataDir: closedDir, serveStatic: false, allowRegistration: false, secureCookies: true })
+    const closedUrl = await listen(closedServer)
+    const config = await (await fetch(`${closedUrl}/api/config`)).json()
+    assert.equal(config.allowRegistration, false)
+    const register = await fetch(`${closedUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'nobody', password: 'secure-password-123' }),
+    })
+    assert.equal(register.status, 403)
+    const logout = await fetch(`${closedUrl}/api/auth/logout`, { method: 'POST' })
+    assert.match(logout.headers.get('set-cookie'), /; Secure/)
+  } finally {
+    if (closedServer?.listening) await closeServer(closedServer)
+    await rm(closedDir, { recursive: true, force: true })
+  }
+})
+
+test('static responses carry security headers and support HEAD', async () => {
+  const fixtureDir = await mkdtemp(join(tmpdir(), 'pixelforge-headers-test-'))
+  const staticDir = join(fixtureDir, 'public')
+  await mkdir(join(staticDir, 'assets'), { recursive: true })
+  await writeFile(join(staticDir, 'index.html'), '<!doctype html>')
+  await writeFile(join(staticDir, 'assets', 'app-123.js'), 'console.log(1)')
+  let staticServer
+  try {
+    staticServer = await createApiServer({ dataDir: join(fixtureDir, 'data'), staticDir })
+    const staticUrl = await listen(staticServer)
+    const home = await fetch(staticUrl)
+    assert.match(home.headers.get('content-security-policy'), /frame-ancestors 'none'/)
+    assert.equal(home.headers.get('x-frame-options'), 'DENY')
+    assert.equal(home.headers.get('cache-control'), 'no-cache')
+    const asset = await fetch(`${staticUrl}/assets/app-123.js`, { method: 'HEAD' })
+    assert.equal(asset.status, 200)
+    assert.match(asset.headers.get('cache-control'), /immutable/)
+    assert.equal(await asset.text(), '')
+    assert.equal((await fetch(`${staticUrl}/assets`)).status, 404)
+    assert.equal((await fetch(`${staticUrl}/index.html`, { method: 'POST' })).status, 405)
   } finally {
     if (staticServer?.listening) await closeServer(staticServer)
     await rm(fixtureDir, { recursive: true, force: true })

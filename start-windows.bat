@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo Node.js is not installed. Install Node.js 20+ and try again.
+  echo Node.js is not installed. Install Node.js 22.13+ from https://nodejs.org and try again.
   pause
   exit /b 1
 )
@@ -15,16 +15,15 @@ if errorlevel 1 (
   exit /b 1
 )
 
-node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 20 ? 0 : 1)"
+node -e "const [a,b]=process.versions.node.split('.').map(Number);process.exit(a>22||a===22&&b>=13?0:1)"
 if errorlevel 1 (
-  echo PixelForge requires Node.js 20 or later.
+  echo PixelForge requires Node.js 22.13 or later.
   pause
   exit /b 1
 )
 
-node -e "require('better-sqlite3')" >nul 2>nul
-if errorlevel 1 (
-  call npm ci
+if not exist node_modules (
+  call npm ci --no-audit --no-fund
   if errorlevel 1 goto failed
 )
 
@@ -32,8 +31,7 @@ call npm run build
 if errorlevel 1 goto failed
 
 set NODE_ENV=production
-echo PixelForge is starting at http://localhost:4173
-call npm start
+node server.mjs
 if errorlevel 1 goto failed
 exit /b 0
 

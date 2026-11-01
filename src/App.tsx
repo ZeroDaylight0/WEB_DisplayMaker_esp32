@@ -7,13 +7,45 @@ import {
 import { generateCode, type CodeTarget } from './codegen'
 import { displays, initialElements } from './displays'
 import { parseDisplaySource, updateImportedSource } from './source-import'
-import { deleteCloudProject, getCloudProjects, getCurrentUser, loadCloudProject, saveCloudProject, signIn, signOut, type AccountUser, type CloudProjectSummary } from './cloud'
+import { changePassword, deleteCloudProject, getCloudProjects, getCurrentUser, getServerConfig, loadCloudProject, saveCloudProject, signIn, signOut, type AccountUser, type CloudProjectSummary } from './cloud'
 import type { CanvasElement, DisplayKind, DisplayPreset, Project } from './types'
 
 const STORAGE_KEY = 'pixelforge-project-v1'
+const CUSTOM_DISPLAYS_KEY = 'pixelforge-custom-displays-v1'
 const SOURCE_IMPORT_VERSION = 7
+const displayKinds: DisplayKind[] = ['OLED', 'TFT', 'E-Paper', 'LED Matrix']
 const categories: (DisplayKind | 'All')[] = ['All', 'OLED', 'TFT', 'E-Paper', 'LED Matrix']
 const elementKinds: CanvasElement['kind'][] = ['text', 'rect', 'circle', 'line', 'image']
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+
+// Only embedded raster/SVG data is allowed: remote URLs would leak requests to third parties
+// from imported projects and taint the canvas used for PNG export.
+function isSafeImageData(value: unknown): value is string {
+  return typeof value === 'string' && /^data:image\/(png|jpeg|webp|gif|svg\+xml)[;,]/i.test(value)
+}
+
+// Strips characters that are invalid in file names on Linux, macOS or Windows.
+function safeFileName(name: string, fallback = 'pixelforge') {
+  const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').slice(0, 100)
+  return cleaned || fallback
+}
+
+function readCustomDisplays(): DisplayPreset[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(CUSTOM_DISPLAYS_KEY) ?? '[]')
+    if (!Array.isArray(value)) return []
+    return value.filter((item): item is DisplayPreset => !!item && typeof item === 'object'
+      && typeof item.id === 'string' && item.id.startsWith('custom-')
+      && typeof item.name === 'string' && typeof item.controller === 'string'
+      && displayKinds.includes(item.kind)
+      && Number.isInteger(item.width) && item.width >= 8 && item.width <= 2048
+      && Number.isInteger(item.height) && item.height >= 8 && item.height <= 2048
+      && typeof item.color === 'boolean')
+      .map((item) => ({ id: item.id, name: item.name.slice(0, 80), controller: item.controller.slice(0, 40), kind: item.kind, width: item.width, height: item.height, color: item.color, interface: 'Custom', library: 'esphome' as const }))
+  } catch {
+    return []
+  }
+}
 
 function isProject(value: unknown): value is Project {
   if (!value || typeof value !== 'object') return false
@@ -46,7 +78,8 @@ function isProject(value: unknown): value is Project {
         && (item.repeatAxis === undefined || item.repeatAxis === 'x' || item.repeatAxis === 'y')
         && (item.repeatOffsets === undefined || Array.isArray(item.repeatOffsets) && item.repeatOffsets.every((offset) => Number.isFinite(offset)))
         && (item.fontWeight === 'normal' || item.fontWeight === 'bold')
-        && (item.kind !== 'image' || typeof item.imageData === 'string')
+        && (item.kind !== 'image' || isSafeImageData(item.imageData))
+        && (item.imageData === undefined || isSafeImageData(item.imageData))
     })
     && (candidate.sourceTopics === undefined || Array.isArray(candidate.sourceTopics) && candidate.sourceTopics.every((topic) =>
       !!topic && typeof topic === 'object' && typeof topic.id === 'string' && typeof topic.topic === 'string',
@@ -182,7 +215,7 @@ function App() {
   const [sourceDraftFormat, setSourceDraftFormat] = useState<'arduino' | 'esphome'>('arduino')
   const [sourceWarnings, setSourceWarnings] = useState<string[]>([])
   const [isCustomOpen, setIsCustomOpen] = useState(false)
-  const [customDisplays, setCustomDisplays] = useState<DisplayPreset[]>([])
+  const [customDisplays, setCustomDisplays] = useState<DisplayPreset[]>(readCustomDisplays)
   const [toast, setToast] = useState('')
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
   const [account, setAccount] = useState<AccountUser | null>(null)
@@ -194,6 +227,10 @@ function App() {
   const [cloudBusy, setCloudBusy] = useState(false)
   const [cloudProjects, setCloudProjects] = useState<CloudProjectSummary[]>([])
   const [cloudError, setCloudError] = useState('')
+  const [allowRegistration, setAllowRegistration] = useState(true)
+  const [isPasswordOpen, setIsPasswordOpen] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
   const [clipboardElement, setClipboardElement] = useState<CanvasElement | null>(null)
   const [history, setHistory] = useState<Project[]>([])
   const [future, setFuture] = useState<Project[]>([])
@@ -202,14 +239,24 @@ function App() {
   const importRef = useRef<HTMLInputElement>(null)
   const imageImportRef = useRef<HTMLInputElement>(null)
   const sourceImportRef = useRef<HTMLInputElement>(null)
-  const dragRef = useRef<{ id: string; mode: 'move' | 'resize'; dx: number; dy: number } | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const dragRef = useRef<{ id: string; mode: 'move' | 'resize'; dx: number; dy: number; snapshot: Project; moved: boolean } | null>(null)
 
   useEffect(() => {
     getCurrentUser().then(setAccount).catch((error: unknown) => {
       console.error('Не удалось проверить аккаунт:', error)
       setToast('Не удалось подключиться к серверу аккаунтов')
     })
+    getServerConfig().then((config) => setAllowRegistration(config.allowRegistration)).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CUSTOM_DISPLAYS_KEY, JSON.stringify(customDisplays))
+    } catch (error) {
+      console.error('Не удалось сохранить пользовательские дисплеи:', error)
+    }
+  }, [customDisplays])
 
   useEffect(() => {
     const stage = canvasStageRef.current
@@ -361,6 +408,24 @@ function App() {
       setCloudError(error instanceof Error ? error.message : 'Не удалось удалить проект')
     } finally {
       setCloudBusy(false)
+    }
+  }
+
+  const submitPasswordChange = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setAuthBusy(true)
+    setCloudError('')
+    try {
+      await changePassword(currentPassword, newPassword)
+      setCurrentPassword('')
+      setNewPassword('')
+      setIsPasswordOpen(false)
+      setToast('Пароль изменён, другие устройства отключены')
+    } catch (error) {
+      console.error('Не удалось сменить пароль:', error)
+      setCloudError(error instanceof Error ? error.message : 'Не удалось сменить пароль')
+    } finally {
+      setAuthBusy(false)
     }
   }
 
@@ -543,9 +608,8 @@ function App() {
     const cursor = point(event as PointerEvent<SVGSVGElement>)
     const boundsX = item.x - (item.textAnchor === 'middle' ? item.width / 2 : item.textAnchor === 'end' ? item.width : 0)
     const boundsY = item.y - (item.textBaseline === 'central' ? item.height / 2 : item.textBaseline === 'text-after-edge' || item.textBaseline === 'alphabetic' ? item.height : 0)
-    dragRef.current = { id: item.id, mode, dx: cursor.x - (mode === 'resize' ? boundsX + item.width : item.x), dy: cursor.y - (mode === 'resize' ? boundsY + item.height : item.y) }
-    setHistory((items) => [...items.slice(-49), project])
-    setFuture([])
+    // The undo step is recorded on the first real movement, so a plain click does not create one.
+    dragRef.current = { id: item.id, mode, dx: cursor.x - (mode === 'resize' ? boundsX + item.width : item.x), dy: cursor.y - (mode === 'resize' ? boundsY + item.height : item.y), snapshot: project, moved: false }
     setSelectedId(item.id)
     setRightTab('properties')
     svgRef.current?.setPointerCapture(event.pointerId)
@@ -555,11 +619,22 @@ function App() {
     const drag = dragRef.current
     if (!drag) return
     const cursor = point(event)
-    if (drag.mode === 'move') {
-      setProject((current) => ({ ...current, elements: current.elements.map((item) => item.id === drag.id ? { ...item, x: Math.round(cursor.x - drag.dx), y: Math.round(cursor.y - drag.dy) } : item) }))
-    } else {
-      setProject((current) => ({ ...current, elements: current.elements.map((item) => item.id === drag.id ? { ...item, width: Math.max(4, Math.round(cursor.x - item.x - drag.dx)), height: Math.max(4, Math.round(cursor.y - item.y - drag.dy)) } : item) }))
+    // With the grid on, positions and sizes snap to the grid step shown on the canvas.
+    const step = grid ? (project.width > 200 ? 10 : 4) : 1
+    const snap = (value: number) => Math.round(value / step) * step
+    const original = drag.snapshot.elements.find((item) => item.id === drag.id)
+    if (!original) return
+    const raw = drag.mode === 'move'
+      ? { x: Math.round(cursor.x - drag.dx), y: Math.round(cursor.y - drag.dy) }
+      : { width: Math.max(4, Math.round(cursor.x - original.x - drag.dx)), height: Math.max(4, Math.round(cursor.y - original.y - drag.dy)) }
+    if (!drag.moved && Object.entries(raw).every(([key, value]) => original[key as keyof typeof raw] === value)) return
+    const patch = Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, key === 'width' || key === 'height' ? Math.max(4, snap(value)) : snap(value)]))
+    if (!drag.moved) {
+      drag.moved = true
+      setHistory((items) => [...items.slice(-49), drag.snapshot])
+      setFuture([])
     }
+    setProject((current) => ({ ...current, elements: current.elements.map((item) => item.id === drag.id ? { ...item, ...patch } : item) }))
   }
 
   const endDrag = () => { dragRef.current = null }
@@ -623,7 +698,7 @@ function App() {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
-  const saveProject = () => download(JSON.stringify(project, null, 2), `${project.name.toLowerCase().replace(/\s+/g, '-')}.pixelforge.json`, 'application/json')
+  const saveProject = () => download(JSON.stringify(project, null, 2), `${safeFileName(project.name).toLowerCase().replace(/\s+/g, '-')}.pixelforge.json`, 'application/json')
 
   const importProject = async (file?: File) => {
     if (!file) return
@@ -652,7 +727,7 @@ function App() {
     clone.setAttribute('height', String(project.height))
     clone.querySelectorAll('[data-selection]').forEach((node) => node.remove())
     clone.querySelectorAll('[data-editor-grid]').forEach((node) => node.remove())
-    download(new XMLSerializer().serializeToString(clone), `${project.name}.svg`, 'image/svg+xml')
+    download(new XMLSerializer().serializeToString(clone), `${safeFileName(project.name)}.svg`, 'image/svg+xml')
     setToast('SVG экспортирован')
   }
 
@@ -684,7 +759,7 @@ function App() {
           setToast('Не удалось собрать PNG')
           return
         }
-        download(blob, `${project.name}.png`, 'image/png')
+        download(blob, `${safeFileName(project.name)}.png`, 'image/png')
         setToast('PNG экспортирован')
       })
     }
@@ -719,7 +794,7 @@ function App() {
   const codeDownload = () => {
     if (!generatedCode) return
     const format = project.sourceFormat ?? codeTarget
-    download(generatedCode, format === 'arduino' ? `${project.name}.ino` : 'display.yaml', format === 'arduino' ? 'text/plain' : 'text/yaml')
+    download(generatedCode, format === 'arduino' ? `${safeFileName(project.name).replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '') || 'sketch'}.ino` : 'display.yaml', format === 'arduino' ? 'text/plain' : 'text/yaml')
   }
 
   const copyCode = async () => {
@@ -735,10 +810,35 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target
-      if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target instanceof HTMLElement && target.isContentEditable) return
-      if (target instanceof HTMLInputElement && /^(text|search|email|password|url|tel)$/i.test(target.type)) return
+      const modalOpen = isCodeOpen || isSourceOpen || isCustomOpen || isAccountOpen
+      if (event.key === 'Escape') {
+        if (isAccountOpen && !authBusy && !cloudBusy) setIsAccountOpen(false)
+        else if (isCodeOpen) setIsCodeOpen(false)
+        else if (isSourceOpen) setIsSourceOpen(false)
+        else if (isCustomOpen) setIsCustomOpen(false)
+        else if (!modalOpen) setSelectedId(null)
+        return
+      }
+      if (modalOpen) return
       const modifier = event.ctrlKey || event.metaKey
+      if (modifier && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setActiveTab('design')
+        searchRef.current?.focus()
+        searchRef.current?.select()
+        return
+      }
+      // Any form control keeps its native keyboard behaviour (including Backspace in number fields).
+      const target = event.target
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target instanceof HTMLElement && target.isContentEditable) return
+      if (event.key.startsWith('Arrow') && selectedId && !modifier) {
+        event.preventDefault()
+        const step = event.shiftKey ? 10 : 1
+        const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0
+        const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0
+        updateProject({ ...project, elements: project.elements.map((item) => item.id === selectedId ? { ...item, x: item.x + dx, y: item.y + dy } : item) })
+        return
+      }
       if (modifier && event.key.toLowerCase() === 'z' && !event.shiftKey) {
         event.preventDefault()
         const previous = history[history.length - 1]
@@ -785,7 +885,7 @@ function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [history, future, project, selectedId, clipboardElement])
+  }, [history, future, project, selectedId, clipboardElement, isCodeOpen, isSourceOpen, isCustomOpen, isAccountOpen, authBusy, cloudBusy])
 
   return (
     <div className="app-shell">
@@ -824,7 +924,7 @@ function App() {
               <div><h2>Библиотека</h2><span>Выберите экран для проекта</span></div>
               <button className="round-button" title="Пользовательский дисплей" onClick={() => setIsCustomOpen(true)}><Plus size={16} /></button>
             </div>
-            <label className="search-field"><Search size={15} /><input placeholder="Модель или контроллер…" value={search} onChange={(event) => setSearch(event.target.value)} /><span className="shortcut">⌘ K</span></label>
+            <label className="search-field"><Search size={15} /><input ref={searchRef} placeholder="Модель или контроллер…" value={search} onChange={(event) => setSearch(event.target.value)} /><span className="shortcut">{isMac ? '⌘ K' : 'Ctrl K'}</span></label>
             <div className="category-scroller">
               {categories.map((item) => <button key={item} className={`category-chip ${category === item ? 'selected' : ''}`} onClick={() => setCategory(item)}>{item === 'All' ? 'Все' : item}</button>)}
             </div>
@@ -841,7 +941,7 @@ function App() {
             </div>
             <button className="custom-display-link" onClick={() => setIsCustomOpen(true)}><Plus size={15} /> Настроить свой дисплей</button>
           </div>
-          <div className="sidebar-footer"><span className="tiny-led" /> Каталог обновляется <span className="version">v1.0</span></div>
+          <div className="sidebar-footer"><span className="tiny-led" /> Каталог обновляется <span className="version">v{__APP_VERSION__}</span></div>
         </aside>
 
         <main className="editor">
@@ -964,7 +1064,11 @@ function App() {
                 {selected.kind === 'text' && <div className="field-row"><label className="field-label">Размер шрифта<input className="number-input" type="number" min="5" max="60" value={selected.fontSize} onChange={(event) => updateElement(selected.id, { fontSize: Math.max(5, Number(event.target.value)) })} /></label><label className="field-label">Начертание<select className="select-input" value={selected.fontWeight} onChange={(event) => updateElement(selected.id, { fontWeight: event.target.value as CanvasElement['fontWeight'] })}><option value="normal">Обычный</option><option value="bold">Жирный</option></select></label></div>}
                 {selected.kind === 'text' && <label className="field-label">Семейство шрифта<select className="select-input" value={selected.fontFamily} onChange={(event) => updateElement(selected.id, { fontFamily: event.target.value })}><option value="monospace">Моноширинный</option><option value="Arial, sans-serif">Без засечек</option><option value="serif">С засечками</option></select></label>}
                 {selected.kind === 'rect' && <label className="field-label">Скругление углов <span className="range-value">{selected.radius}px</span><input className="range-input" type="range" min="0" max={Math.min(30, Math.floor(Math.min(selected.width, selected.height) / 2))} value={selected.radius} onChange={(event) => updateElement(selected.id, { radius: Number(event.target.value) })} /></label>}
-                {selected.kind !== 'image' && <label className="field-label">{selected.kind === 'line' ? 'Цвет линии' : 'Цвет заливки'}<div className="color-picker"><input type="color" value={/^#[\da-f]{6}$/i.test(selected.kind === 'line' ? selected.stroke : selected.fill) ? selected.kind === 'line' ? selected.stroke : selected.fill : '#ffffff'} onChange={(event) => updateElement(selected.id, selected.kind === 'line' ? { stroke: event.target.value } : { fill: event.target.value })} /><span>{selected.kind === 'line' ? selected.stroke : selected.fill}</span></div></label>}
+                {(selected.kind === 'rect' || selected.kind === 'circle') && <label className="custom-check outline-toggle"><input type="checkbox" checked={selected.fill === 'none'} onChange={(event) => updateElement(selected.id, event.target.checked
+                  ? { fill: 'none', stroke: /^#[\da-f]{6}$/i.test(selected.fill) ? selected.fill : /^#[\da-f]{6}$/i.test(selected.stroke) ? selected.stroke : '#c3f36b' }
+                  : { fill: /^#[\da-f]{6}$/i.test(selected.stroke) ? selected.stroke : '#c3f36b' })} /> Только контур</label>}
+                {(selected.kind === 'rect' || selected.kind === 'circle') && selected.fill === 'none' ? <label className="field-label">Цвет контура<div className="color-picker"><input type="color" value={/^#[\da-f]{6}$/i.test(selected.stroke) ? selected.stroke : '#ffffff'} onChange={(event) => updateElement(selected.id, { stroke: event.target.value })} /><span>{selected.stroke}</span></div></label>
+                : selected.kind !== 'image' && <label className="field-label">{selected.kind === 'line' ? 'Цвет линии' : 'Цвет заливки'}<div className="color-picker"><input type="color" value={/^#[\da-f]{6}$/i.test(selected.kind === 'line' ? selected.stroke : selected.fill) ? selected.kind === 'line' ? selected.stroke : selected.fill : '#ffffff'} onChange={(event) => updateElement(selected.id, selected.kind === 'line' ? { stroke: event.target.value } : { fill: event.target.value })} /><span>{selected.kind === 'line' ? selected.stroke : selected.fill}</span></div></label>}
                 <div className="layer-action-row"><button title="На передний план" onClick={() => moveLayer(1)}><ArrowUp size={14} /></button><button title="На задний план" onClick={() => moveLayer(-1)}><ArrowDown size={14} /></button><button title="Дублировать" onClick={duplicateSelected}><Copy size={14} /></button><button className="delete-action" title="Удалить" onClick={removeSelected}><X size={14} /></button></div>
               </> : <div className="layers-list">{[...project.elements].reverse().map((item) => <button key={item.id} className={`layer-item ${selectedId === item.id ? 'selected-layer' : ''}`} onClick={() => { setSelectedId(item.id); setRightTab('properties') }}><span className="layer-icon">{item.kind === 'text' ? <Type size={14} /> : item.kind === 'circle' ? <Circle size={14} /> : item.kind === 'line' ? <Minus size={14} /> : item.kind === 'image' ? <Image size={14} /> : <Square size={14} />}</span><span>{item.name}</span><span className="layer-visible" title="Выбрать"><Eye size={13} /></span></button>)}</div>}
             </div>
@@ -986,6 +1090,12 @@ function App() {
           </div>
           {account ? <>
             <div className="account-user"><span className="account-avatar"><UserRound size={16} /></span><div><b>{account.username}</b><small>Вход выполнен</small></div><button className="button button-secondary" onClick={() => void logout()} disabled={authBusy}><LogOut size={14} /> Выйти</button></div>
+            {isPasswordOpen ? <form className="account-form password-form" onSubmit={(event) => void submitPasswordChange(event)}>
+              <input type="text" autoComplete="username" value={account.username} readOnly hidden />
+              <label className="field-label">Текущий пароль<input className="text-input" type="password" autoComplete="current-password" maxLength={256} value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+              <label className="field-label">Новый пароль<input className="text-input" type="password" autoComplete="new-password" minLength={8} maxLength={256} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label>
+              <div className="custom-actions"><button type="button" className="button button-secondary" onClick={() => { setIsPasswordOpen(false); setCurrentPassword(''); setNewPassword('') }} disabled={authBusy}>Отмена</button><button type="submit" className="button button-primary" disabled={authBusy}>{authBusy ? 'Подождите…' : 'Сменить пароль'}</button></div>
+            </form> : <button className="account-mode-switch" onClick={() => { setIsPasswordOpen(true); setCloudError('') }}>Сменить пароль</button>}
             <div className="cloud-project-heading"><b>Облачные проекты</b><button className="icon-button" title="Обновить список" onClick={() => void refreshCloudProjects()} disabled={cloudBusy}><Redo2 size={15} /></button></div>
             <div className="cloud-project-list">
               {cloudProjects.map((item) => <div className="cloud-project-row" key={item.id}>
@@ -1002,7 +1112,9 @@ function App() {
               {cloudError && <p className="account-error" role="alert">{cloudError}</p>}
               <button className="button button-primary account-submit" type="submit" disabled={authBusy}>{authBusy ? 'Подождите…' : authMode === 'login' ? 'Войти' : 'Создать аккаунт'}</button>
             </form>
-            <button className="account-mode-switch" onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setCloudError('') }}>{authMode === 'login' ? 'Нет аккаунта? Создать' : 'Уже есть аккаунт? Войти'}</button>
+            {allowRegistration
+              ? <button className="account-mode-switch" onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setCloudError('') }}>{authMode === 'login' ? 'Нет аккаунта? Создать' : 'Уже есть аккаунт? Войти'}</button>
+              : <p className="account-hint">Регистрация новых аккаунтов отключена администратором сервера.</p>}
           </>}
           {account && cloudError && <p className="account-error" role="alert">{cloudError}</p>}
           <div className="account-footer"><Save size={13} /> Веб-проект и экспорт исходного кода — отдельные функции.</div>
