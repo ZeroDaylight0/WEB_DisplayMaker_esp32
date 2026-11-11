@@ -349,3 +349,17 @@ button:disabled { cursor: not-allowed !important; opacity: .38; }
 .outline-toggle { padding-top: 0; margin: -2px 0 10px; }
 .password-form { margin: 0 0 14px; }
 .password-form .custom-actions { margin-top: 4px; }
+
+.render-button { display: inline-flex; align-items: center; gap: 5px; height: 26px; margin-left: 4px; padding: 0 10px; color: #17190f; background: var(--accent); border: 0; border-radius: 5px; font: 600 10px 'Space Grotesk', sans-serif; cursor: pointer; }
+.render-button:hover { filter: brightness(1.08); }
+.render-modal { width: min(980px, 100%); display: flex; flex-direction: column; max-height: min(860px, 94vh); background: #17181b; border: 1px solid #35363b; border-radius: 10px; box-shadow: 0 30px 100px #000b; overflow: hidden; }
+.render-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; padding: 0 22px 12px; }
+.render-controls > label:first-child { display: flex; flex-direction: column; gap: 5px; width: 130px; color: #96979b; font-size: 9px; }
+.render-toggle { display: inline-flex; align-items: center; gap: 6px; height: 28px; color: #c4c5bf; font-size: 10px; cursor: pointer; }
+.render-toggle input { accent-color: var(--accent); }
+.render-toggle-disabled { color: #66686e; cursor: default; }
+.render-preview { flex: 1; min-height: 220px; display: flex; margin: 0 22px; padding: 18px; overflow: auto; background: repeating-conic-gradient(#141518 0 25%, #18191c 0 50%) 0 0 / 16px 16px; border: 1px solid #2c2d31; border-radius: 6px; }
+.render-preview img { display: block; height: auto; margin: auto; }
+.render-preview .render-busy, .render-preview .render-error { margin: auto; }
+.render-busy { color: #808187; font: 10px var(--mono); }
+.render-error { color: #e08a7a; font-size: 11px; }

@@ -2,17 +2,18 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent
 import {
   ArrowDown, ArrowUp, Check, ChevronDown, Circle, Code2, Copy, Download, Eye, FileCode2,
   Cloud, FolderOpen, Grid2X2, Image, Layers3, LogOut, Minus, Monitor, MoreHorizontal, Plus, Search, Settings2,
-  Redo2, Save, Sparkles, Square, Type, Undo2, UserRound, Wifi, X, ZoomIn, ZoomOut,
+  Camera, Redo2, Save, Sparkles, Square, Type, Undo2, UserRound, Wifi, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 import { generateCode, type CodeTarget } from './codegen'
 import { displays, initialElements } from './displays'
 import { parseDisplaySource, updateImportedSource } from './source-import'
+import { autoScale, canvasToBlob, isElementVisible, renderFramed, renderSheet, screenStates } from './render'
 import { changePassword, deleteCloudProject, getCloudProjects, getCurrentUser, getServerConfig, loadCloudProject, saveCloudProject, signIn, signOut, type AccountUser, type CloudProjectSummary } from './cloud'
 import type { CanvasElement, DisplayKind, DisplayPreset, Project } from './types'
 
 const STORAGE_KEY = 'pixelforge-project-v1'
 const CUSTOM_DISPLAYS_KEY = 'pixelforge-custom-displays-v1'
-const SOURCE_IMPORT_VERSION = 7
+const SOURCE_IMPORT_VERSION = 8
 const displayKinds: DisplayKind[] = ['OLED', 'TFT', 'E-Paper', 'LED Matrix']
 const categories: (DisplayKind | 'All')[] = ['All', 'OLED', 'TFT', 'E-Paper', 'LED Matrix']
 const elementKinds: CanvasElement['kind'][] = ['text', 'rect', 'circle', 'line', 'image']
@@ -214,7 +215,14 @@ function App() {
   const [sourceDraft, setSourceDraft] = useState('')
   const [sourceDraftFormat, setSourceDraftFormat] = useState<'arduino' | 'esphome'>('arduino')
   const [sourceWarnings, setSourceWarnings] = useState<string[]>([])
+  const [sourceFileName, setSourceFileName] = useState('')
   const [isCustomOpen, setIsCustomOpen] = useState(false)
+  const [isRenderOpen, setIsRenderOpen] = useState(false)
+  const [renderScale, setRenderScale] = useState(0)
+  const [renderBezel, setRenderBezel] = useState(true)
+  const [renderAllStates, setRenderAllStates] = useState(false)
+  const [renderResult, setRenderResult] = useState<{ url: string; blob: Blob; width: number; height: number; count: number } | null>(null)
+  const [renderError, setRenderError] = useState('')
   const [customDisplays, setCustomDisplays] = useState<DisplayPreset[]>(readCustomDisplays)
   const [toast, setToast] = useState('')
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
@@ -281,9 +289,8 @@ function App() {
     && `${item.name} ${item.controller} ${item.boardFamily ?? ''} ${item.width} ${item.height}`.toLowerCase().includes(search.toLowerCase()),
   ), [allDisplays, category, search])
   const selected = project.elements.find((element) => element.id === selectedId) ?? null
-  const visibleElements = project.elements.filter((element) =>
-    (element.sourceBranchPath ?? []).every(({ id, choice }) => (project.sourceBranchSelection?.[id] ?? 0) === choice),
-  )
+  const visibleElements = project.elements.filter((element) => isElementVisible(element, project.sourceBranchSelection))
+  const renderStateCount = useMemo(() => screenStates(project).length, [project])
   const offscreenElements = visibleElements.filter((element) => elementExceedsDisplay(element, project.width, project.height)).length
   const importedSource = project.sourceCode && project.sourceFormat ? updateImportedSource(project) : null
   const activeSourceWarnings = importedSource?.warnings ?? sourceWarnings
@@ -532,6 +539,7 @@ function App() {
     }
     try {
       setSourceDraft(await file.text())
+      setSourceFileName(file.name.replace(/\.[^.]+$/, '').slice(0, 80))
       setSourceDraftFormat(extension === 'yaml' || extension === 'yml' ? 'esphome' : 'arduino')
       setSourceWarnings([])
       setIsSourceOpen(true)
@@ -544,6 +552,7 @@ function App() {
   }
 
   const openSourceImport = () => {
+    setSourceFileName('')
     setSourceDraft(project.sourceCode ?? '')
     setSourceDraftFormat(project.sourceFormat ?? 'arduino')
     setSourceWarnings(project.sourceCode && project.sourceFormat ? parseDisplaySource(project.sourceCode, project.sourceFormat).warnings : [])
@@ -556,14 +565,16 @@ function App() {
       return
     }
     const parsed = parseDisplaySource(sourceDraft, sourceDraftFormat)
-    const next = { ...project, elements: measureImportedText(parsed.elements), sourceCode: sourceDraft, sourceFormat: sourceDraftFormat, sourceTopics: parsed.sourceTopics, sourceBranchGroups: parsed.sourceBranchGroups, sourceBranchSelection: parsed.sourceBranchSelection, sourceImportVersion: SOURCE_IMPORT_VERSION }
+    const next = { ...project, ...(sourceFileName ? { name: sourceFileName } : {}), elements: measureImportedText(parsed.elements), sourceCode: sourceDraft, sourceFormat: sourceDraftFormat, sourceTopics: parsed.sourceTopics, sourceBranchGroups: parsed.sourceBranchGroups, sourceBranchSelection: parsed.sourceBranchSelection, sourceImportVersion: SOURCE_IMPORT_VERSION }
     setSourceWarnings(parsed.warnings)
     let imported = next
     setSelectedId(parsed.elements[0]?.id ?? null)
     if (parsed.suggestedDisplayId) {
       const matched = allDisplays.find((item) => item.id === parsed.suggestedDisplayId)
       if (matched) {
-        imported = { ...next, displayId: matched.id, width: matched.width, height: matched.height, color: matched.color }
+        // Keep the rotated size from the source (e.g. a 135×240 panel with `rotation: 90`).
+        const size = parsed.suggestedSize ?? matched
+        imported = { ...next, displayId: matched.id, width: size.width, height: size.height, color: matched.color }
       }
     } else if (parsed.suggestedSize) {
       imported = {
@@ -771,6 +782,45 @@ function App() {
     image.src = source
   }
 
+  const displayKind = display.kind
+  const displayLabel = display.boardFamily ?? display.name
+  useEffect(() => {
+    if (!isRenderOpen) return
+    let cancelled = false
+    let url = ''
+    setRenderError('')
+    const options = { scale: renderScale, bezel: renderBezel }
+    const job = renderAllStates && renderStateCount > 1
+      ? renderSheet(project, displayKind, displayLabel, options)
+      : renderFramed(project, displayKind, options).then((canvas) => ({ canvas, count: 1 }))
+    job
+      .then(async ({ canvas, count }) => {
+        const blob = await canvasToBlob(canvas)
+        if (cancelled) return
+        url = URL.createObjectURL(blob)
+        setRenderResult({ url, blob, width: canvas.width, height: canvas.height, count })
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setRenderError(error instanceof Error ? error.message : 'Failed to render')
+      })
+    return () => {
+      cancelled = true
+      if (url) window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    }
+  }, [isRenderOpen, renderScale, renderBezel, renderAllStates, renderStateCount, project, displayKind, displayLabel])
+
+  const openRender = () => {
+    setRenderResult(null)
+    setIsRenderOpen(true)
+  }
+
+  const downloadRender = () => {
+    if (!renderResult) return
+    const suffix = renderResult.count > 1 ? '-states' : ''
+    download(renderResult.blob, `${safeFileName(project.name).toLowerCase().replace(/\s+/g, '-')}${suffix}.png`, 'image/png')
+    setToast(renderResult.count > 1 ? `Rendered ${renderResult.count} screen states` : 'Render saved')
+  }
+
   const addCustomDisplay = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const data = new FormData(event.currentTarget)
@@ -960,7 +1010,8 @@ function App() {
               <button className="icon-button" title="Zoom in" onClick={() => setZoom(Math.min(2.5, Number((zoom + .1).toFixed(1))))}><ZoomIn size={16} /></button>
               <span className="toolbar-divider" />
               <button className="icon-button" title="Export SVG" onClick={exportSvg}><Image size={16} /></button>
-              <button className="icon-button" title="Export PNG" onClick={exportPng}><Download size={16} /></button>
+              <button className="icon-button" title="Export PNG (1:1)" onClick={exportPng}><Download size={16} /></button>
+              <button className="render-button" title="Render screens to PNG" onClick={openRender}><Camera size={14} /> Render</button>
             </div>
           </div>
 
@@ -1013,7 +1064,7 @@ function App() {
             </div>
             <div className="canvas-bottom">
               <div className="canvas-status"><span className={`status-check ${offscreenElements || unsupportedCommands ? 'status-warning' : ''}`}>{offscreenElements || unsupportedCommands ? '!' : <Check size={11} />}</span><span>{offscreenElements ? `Off screen: ${offscreenElements}; ` : 'Screen is ready to export'}</span><span className="status-divider" /><span>{visibleElements.length} of {project.elements.length} objects</span>{unsupportedCommands && <><span className="status-divider" /><span title="Some source commands cannot be shown as objects yet">Not imported: {unsupportedCommands}</span></>}</div>
-              <button className="preview-link" onClick={exportPng}><Eye size={14} /> Preview <ArrowUp size={12} className="up-right-icon" /></button>
+              <button className="preview-link" onClick={openRender}><Eye size={14} /> Render <ArrowUp size={12} className="up-right-icon" /></button>
             </div>
           </div>
 
@@ -1124,6 +1175,25 @@ function App() {
         </section>
       </div>}
 
+      {isRenderOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsRenderOpen(false) }}>
+        <section className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-title">
+          <div className="modal-heading"><div><span className="modal-kicker"><Camera size={13} /> SCREEN RENDER</span><h2 id="render-title">Render screens to PNG</h2><p>Pixel-accurate image of {display.boardFamily ?? display.name} · {project.width} × {project.height} px, drawn the way the device draws it.</p></div><button className="close-button" onClick={() => setIsRenderOpen(false)}><X size={18} /></button></div>
+          <div className="render-controls">
+            <label>Scale<select className="select-input" value={renderScale} onChange={(event) => setRenderScale(Number(event.target.value))}>
+              <option value={0}>Auto ({autoScale(project.width, project.height)}×)</option>
+              {[1, 2, 3, 4, 6, 8].map((scale) => <option key={scale} value={scale}>{scale}×</option>)}
+            </select></label>
+            <label className="render-toggle"><input type="checkbox" checked={renderBezel} onChange={(event) => setRenderBezel(event.target.checked)} /> Device bezel</label>
+            <label className={`render-toggle ${renderStateCount > 1 ? '' : 'render-toggle-disabled'}`} title={renderStateCount > 1 ? 'Pages and conditional branches from the imported code' : 'Import code with pages or if/else screens to render every state'}><input type="checkbox" disabled={renderStateCount < 2} checked={renderAllStates && renderStateCount > 1} onChange={(event) => setRenderAllStates(event.target.checked)} /> All screen states{renderStateCount > 1 ? ` (${renderStateCount})` : ''}</label>
+          </div>
+          <div className="render-preview">
+            {renderError ? <p className="render-error">{renderError}</p>
+              : renderResult ? <img src={renderResult.url} alt={`Render of ${project.name}`} style={{ maxWidth: `min(100%, ${renderResult.width}px)` }} />
+                : <span className="render-busy">Rendering…</span>}
+          </div>
+          <div className="modal-footer"><span className="code-ready"><span /> {renderResult ? `${renderResult.width} × ${renderResult.height} px PNG${renderResult.count > 1 ? ` · ${renderResult.count} states` : ''}` : 'Preparing render'}</span><div><button className="button button-secondary" onClick={() => setIsRenderOpen(false)}>Close</button><button className="button button-primary" disabled={!renderResult} onClick={downloadRender}><Download size={14} /> Download PNG</button></div></div>
+        </section>
+      </div>}
       {isCodeOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsCodeOpen(false) }}>
         <section className="code-modal" role="dialog" aria-modal="true" aria-labelledby="code-title">
           <div className="modal-heading"><div><span className="modal-kicker"><Sparkles size={13} /> PIXELFORGE CODEGEN</span><h2 id="code-title">Code for your display</h2><p>{display.controller} · {project.width} × {project.height} · {project.elements.length} objects</p></div><button className="close-button" onClick={() => setIsCodeOpen(false)}><X size={18} /></button></div>
