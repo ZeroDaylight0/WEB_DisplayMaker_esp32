@@ -114,14 +114,15 @@ Data lives in the `pixelforge-data` volume. The image needs no `node_modules` at
 | `PORT` | `4173` (production), `4174` (dev API) | HTTP server port. |
 | `HOST` | `127.0.0.1` | Listen address. `0.0.0.0` allows access from the local network. |
 | `PIXELFORGE_DATA_DIR` | `./data` | Directory for the SQLite database. |
-| `PIXELFORGE_ALLOW_REGISTRATION` | `1` | `0` disables new account registration. Handy once you have created your own account. |
+| `PIXELFORGE_ALLOW_REGISTRATION` | first account only | Unset: only the first account can be created, then sign-up closes. `1` lets anyone register, `0` disables registration completely. |
 | `PIXELFORGE_TRUST_PROXY` | `0` | `1` when the server runs behind a reverse proxy (nginx, Caddy, Traefik), so `X-Forwarded-*` headers are trusted. |
 | `PIXELFORGE_SECURE_COOKIE` | auto | `Secure` cookie flag. By default it is set only over HTTPS, so sign-in also works over `http://<ip>:4173` on a local network. |
 
-Example: local network access with registration disabled:
+Example: local network access. Create your account first; after that nobody
+else on the network can register:
 
 ```sh
-HOST=0.0.0.0 PIXELFORGE_ALLOW_REGISTRATION=0 ./start-linux.sh
+HOST=0.0.0.0 ./start-linux.sh
 ```
 
 ## Development
