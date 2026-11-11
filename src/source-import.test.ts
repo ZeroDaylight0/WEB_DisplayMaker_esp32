@@ -321,7 +321,7 @@ describe('imported display source', () => {
     expect(parsed.elements[1]).toMatchObject({ kind: 'text', fill: '#ff1111', text: 'ALERT!', fontSize: 48 })
     expect(parsed.elements[2]).toMatchObject({ kind: 'text', fill: '#ffbb00', text: 'WARNING', fontSize: 48 })
     expect(parsed.elements[3]).toMatchObject({ kind: 'text', fill: '#00ff22', text: 'SAFE', fontSize: 48 })
-    expect(parsed.elements[4]).toMatchObject({ kind: 'text', fill: '#999999', text: '0%  …', fontSize: 16 })
+    expect(parsed.elements[4]).toMatchObject({ kind: 'text', fill: '#999999', text: '45%  …', fontSize: 16 })
     expect(parsed.elements[4].dynamicVariables).toEqual(['cur_hum', 'weather_desc'])
     expect(parsed.warnings.join(' ')).not.toContain('command(s)')
     expect(parsed.warnings.join(' ')).toContain('Conditional branches can be switched')
@@ -332,11 +332,13 @@ describe('imported display source', () => {
       sourceCode: source, sourceFormat: 'esphome',
     }
     const result = updateImportedSource(project)
-    expect(result?.code).toContain('it.fill(Color(0, 0, 0));')
-    expect(result?.code).toContain('it.printf(150, 40, id(font_huge), Color(255, 17, 17), TextAlign::CENTER, "ALERT!");')
-    expect(result?.code).toContain('it.printf(160, 40, id(font_huge), Color(255, 187, 0), TextAlign::CENTER, "WARNING");')
-    expect(result?.code).toContain('it.printf(160, 40, id(font_huge), Color(0, 255, 34), TextAlign::CENTER, "SAFE");')
-    expect(result?.code).toContain('it.printf(160, 210, id(font_small), Color(153, 153, 153), TextAlign::CENTER, "%d%%  %s", id(cur_hum), id(weather_desc).c_str());')
+    // Unchanged colours keep the expression written in the source.
+    expect(result?.code).toContain('it.fill(Color::BLACK);')
+    expect(result?.code).toContain('it.printf(150, 40, id(font_huge), Color(0xFF, 0x11, 0x11), TextAlign::CENTER, "ALERT!");')
+    expect(result?.code).toContain('it.printf(160, 40, id(font_huge), Color(0xFF, 0xBB, 0x00), TextAlign::CENTER, "WARNING");')
+    expect(result?.code).toContain('it.printf(160, 210, id(font_small), Color(0x99, 0x99, 0x99), TextAlign::CENTER, "%d%%  %s", id(cur_hum), id(weather_desc).c_str());')
+    const recolored = updateImportedSource({ ...project, elements: project.elements.map((element, index) => index === 1 ? { ...element, fill: '#00ff00' } : element) })
+    expect(recolored?.code).toContain('it.printf(150, 40, id(font_huge), Color(0, 255, 0), TextAlign::CENTER, "ALERT!");')
   })
 
   it('detects an SSD1306 YAML model and previews runtime text at its centered anchor', () => {
@@ -752,5 +754,108 @@ describe('imported display source', () => {
     ].join('\n')
     const parsed = parseDisplaySource(source, 'arduino')
     expect(parsed.elements[0]).toMatchObject({ kind: 'rect', x: 10, y: 10, width: 300, height: 220, fill: '#00ff00' })
+  })
+
+  it('reads packed ESPHome colours, colour variables and font sizes with comments', () => {
+    const source = [
+      'font:',
+      '  - file: "gfonts://Roboto"',
+      '    id: font_big   # header',
+      '    size: 28       # px',
+      '  - id: font_default',
+      '    file: "gfonts://Roboto"',
+      'display:',
+      '  - platform: ili9xxx',
+      '    model: ili9341',
+      '    dimensions:',
+      '      width: 320',
+      '      height: 240',
+      '    lambda: |-',
+      '      Color accent = Color(0, 200, 255);',
+      '      it.printf(10, 10, id(font_big), Color(0xFF8800), "Packed");',
+      '      it.printf(10, 50, id(font_default), accent, "Variable");',
+      '      it.filled_rectangle(0, 100, 50, 20, Color(10, 20, 30, 255));',
+    ].join('\n')
+    const parsed = parseDisplaySource(source, 'esphome')
+    expect(parsed.elements).toHaveLength(3)
+    expect(parsed.elements[0]).toMatchObject({ text: 'Packed', fill: '#ff8800', fontSize: 28 })
+    expect(parsed.elements[1]).toMatchObject({ text: 'Variable', fill: '#00c8ff', fontSize: 20 })
+    expect(parsed.elements[2]).toMatchObject({ kind: 'rect', fill: '#0a141e' })
+    const project: Project = {
+      name: 'Colours', displayId: 'cyd-28-ili9341', width: 320, height: 240, color: true,
+      elements: parsed.elements.map((element) => ({ ...element, x: element.x + 5 })),
+      sourceCode: source, sourceFormat: 'esphome',
+    }
+    const code = updateImportedSource(project)?.code
+    expect(code).toContain('it.printf(15, 50, id(font_default), accent, TextAlign::TOP_LEFT, "Variable");')
+    expect(code).toContain('Color(0xFF8800)')
+  })
+
+  it('turns ESPHome pages, early returns and commented else-if chains into switchable states', () => {
+    const source = [
+      'globals:',
+      '  - id: current_page',
+      '    type: int',
+      "    initial_value: '1'",
+      '  - id: wifi_reset',
+      '    type: bool',
+      '  - id: region',
+      '    type: std::string',
+      `    initial_value: '"Kyiv"'`,
+      'display:',
+      '  - platform: ssd1306_i2c',
+      '    model: "SH1106 128x64"',
+      '    pages:',
+      '      - id: page_main',
+      '        lambda: |-',
+      '          if (id(wifi_reset)) {',
+      '            it.print(0, 0, id(font), "RESET");',
+      '            return;',
+      '          }',
+      '          if (id(current_page) == 0) {',
+      '            it.print(0, 20, id(font), "RADAR");',
+      '          }',
+      '          // weather page',
+      '          else if (id(current_page) == 1) {',
+      '            it.printf(0, 20, id(font), "%s", id(region).c_str());',
+      '          }',
+      '      - id: page_total',
+      '        lambda: |-',
+      '          it.print(0, 0, id(font), "TOTAL");',
+    ].join('\n')
+    const parsed = parseDisplaySource(source, 'esphome')
+    expect(parsed.suggestedDisplayId).toBe('sh1106-128x64')
+    const pages = parsed.sourceBranchGroups.find((group) => group.label === 'Display page')
+    expect(pages?.choices).toEqual(['page_main', 'page_total'])
+    const reset = parsed.sourceBranchGroups.find((group) => group.label === 'if (id(wifi_reset))')
+    expect(reset?.choices).toEqual(['if (id(wifi_reset))', 'otherwise (code after it)'])
+    expect(parsed.sourceBranchSelection[reset!.id]).toBe(1)
+    expect(reset?.parentPath).toEqual([{ id: pages!.id, choice: 0 }])
+    const page = parsed.sourceBranchGroups.find((group) => group.label === 'if (id(current_page) == 0)')
+    expect(page?.choices).toContain('else if (id(current_page) == 1)')
+    expect(parsed.sourceBranchSelection[page!.id]).toBe(1)
+    expect(page?.parentPath).toEqual([{ id: pages!.id, choice: 0 }, { id: reset!.id, choice: 1 }])
+    const kyiv = parsed.elements.find((element) => element.text === 'Kyiv')
+    expect(kyiv?.sourceBranchPath).toEqual([{ id: pages!.id, choice: 0 }, { id: reset!.id, choice: 1 }, { id: page!.id, choice: 1 }])
+    expect(parsed.elements.find((element) => element.text === 'TOTAL')?.sourceBranchPath).toEqual([{ id: pages!.id, choice: 1 }])
+  })
+
+  it('applies ESPHome rotation to board presets and uses the nearest snprintf buffer', () => {
+    const source = [
+      'display:',
+      '  - platform: st7789v',
+      '    model: TTGO TDisplay 135x240',
+      '    rotation: 90',
+      '    lambda: |-',
+      '      char buf[16];',
+      '      snprintf(buf, sizeof(buf), "C1: %.2f", id(cell1).state);',
+      '      it.print(0, 0, id(font), buf);',
+      '      snprintf(buf, sizeof(buf), "C2: %.2f", id(cell2).state);',
+      '      it.print(0, 20, id(font), buf);',
+    ].join('\n')
+    const parsed = parseDisplaySource(source, 'esphome')
+    expect(parsed.suggestedDisplayId).toBe('ttgo-tdisplay-135x240')
+    expect(parsed.suggestedSize).toEqual({ width: 240, height: 135 })
+    expect(parsed.elements.map((element) => element.text)).toEqual(['C1: 3.31', 'C2: 3.31'])
   })
 })

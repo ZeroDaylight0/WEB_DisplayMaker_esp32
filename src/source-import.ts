@@ -8,18 +8,77 @@ function u8g2BaselineOffset(fontSize: number) {
   return Math.round(fontSize)
 }
 
-function conditionNumber(value: string, source: string): number | undefined {
+interface EsphomeGlobal {
+  type: string
+  value: number | string | undefined
+}
+
+const globalsCache = new Map<string, Map<string, EsphomeGlobal>>()
+
+function yamlScalar(value: string) {
+  const trimmed = value.replace(/\s+#.*$/, '').trim()
+  const quoted = /^(['"])(.*)\1$/.exec(trimmed)
+  return quoted ? quoted[1] === "'" ? quoted[2].replace(/''/g, "'") : quoted[2] : trimmed
+}
+
+function esphomeGlobals(source: string) {
+  const cached = globalsCache.get(source)
+  if (cached) return cached
+  const globals = new Map<string, EsphomeGlobal>()
+  const start = source.match(/^globals:\s*(?:#.*)?$/m)
+  if (start?.index !== undefined) {
+    const body = source.slice(start.index + start[0].length)
+    const next = body.search(/^[^\s#][\w-]*\s*:/m)
+    const section = next < 0 ? body : body.slice(0, next)
+    for (const item of section.split(/^\s*-\s+/m).slice(1)) {
+      const field = (name: string) => new RegExp(`^\\s*${name}:\\s*(.+)$`, 'm').exec(`  ${item}`)?.[1]
+      const id = field('id')?.trim().match(/^[A-Za-z_]\w*/)?.[0]
+      if (!id) continue
+      const type = yamlScalar(field('type') ?? 'int')
+      const initial = field('initial_value')
+      const raw = initial === undefined ? undefined : yamlScalar(initial)
+      let value: EsphomeGlobal['value']
+      if (/string/i.test(type)) {
+        const text = raw?.match(/^(?:std::string\s*\(\s*)?"((?:\\.|[^"])*)"\s*\)?$/)?.[1]
+        value = text === undefined ? '' : text.replace(/\\(.)/g, '$1')
+      } else if (raw === undefined || raw === '') value = /bool|int|float|double|long|short|unsigned|uint|size_t/i.test(type) ? 0 : undefined
+      else if (/^true$/i.test(raw)) value = 1
+      else if (/^false$/i.test(raw)) value = 0
+      else value = Number.isFinite(Number(raw)) ? Number(raw) : undefined
+      globals.set(id, { type, value })
+    }
+  }
+  if (globalsCache.size > 16) globalsCache.clear()
+  globalsCache.set(source, globals)
+  return globals
+}
+
+function globalString(identifier: string, source: string) {
+  const value = esphomeGlobals(source).get(identifier)?.value
+  return typeof value === 'string' && value ? value : undefined
+}
+
+function conditionNumber(value: string, source: string, depth = 0): number | undefined {
   let token = value.trim()
   while (token.startsWith('(') && matchingDelimiter(token, 0, '(', ')') === token.length - 1) token = token.slice(1, -1).trim()
   const direct = Number(token)
   if (token && Number.isFinite(direct)) return direct
-  if (!/^[A-Za-z_]\w*$/.test(token)) return undefined
+  if (token === 'true') return 1
+  if (token === 'false') return 0
+  const globalId = /^id\(\s*([A-Za-z_]\w*)\s*\)$/.exec(token)?.[1]
+  if (globalId) {
+    const global = esphomeGlobals(source).get(globalId)
+    return typeof global?.value === 'number' ? global.value : undefined
+  }
+  if (!/^[A-Za-z_]\w*$/.test(token) || depth > 4) return undefined
   const define = new RegExp(`^\\s*#\\s*define\\s+${token}\\s+(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+))\\s*$`, 'm').exec(source)
   if (define) return Number(define[1])
   const declaration = new RegExp(`\\b(?:const\\s+)?(?:bool|int|float|double|long|short|unsigned|uint\\d+_t|int\\d+_t|size_t|auto)\\s+${token}\\s*=\\s*([^,;\\r\\n]+)`).exec(source)?.[1]?.trim()
   if (!declaration) return undefined
   const initial = Number(declaration)
   if (Number.isFinite(initial)) return initial
+  const resolved = conditionNumber(declaration, source, depth + 1)
+  if (resolved !== undefined) return resolved
   const stateId = declaration.match(/id\(\s*([A-Za-z_]\w*)\s*\)\.state/)?.[1].toLowerCase()
   if (stateId) {
     if (/temp/.test(stateId)) return 21.5
@@ -82,6 +141,61 @@ function sourceCondition(condition: string, source: string): boolean {
   }
 }
 
+function splitLogical(value: string, operator: '||' | '&&') {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === '(') depth += 1
+    else if (value[index] === ')') depth -= 1
+    else if (depth === 0 && value.startsWith(operator, index)) {
+      parts.push(value.slice(start, index).trim())
+      start = index + operator.length
+      index += operator.length - 1
+    }
+  }
+  if (parts.length) parts.push(value.slice(start).trim())
+  return parts
+}
+
+// Like sourceCondition, but returns undefined when the outcome depends on runtime data.
+function conditionValue(condition: string, source: string): boolean | undefined {
+  let value = condition.trim()
+  while (value.startsWith('(') && matchingDelimiter(value, 0, '(', ')') === value.length - 1) value = value.slice(1, -1).trim()
+  const disjunction = splitLogical(value, '||')
+  if (disjunction.length) {
+    const results = disjunction.map((part) => conditionValue(part, source))
+    if (results.includes(true)) return true
+    return results.every((result) => result === false) ? false : undefined
+  }
+  const conjunction = splitLogical(value, '&&')
+  if (conjunction.length) {
+    const results = conjunction.map((part) => conditionValue(part, source))
+    if (results.includes(false)) return false
+    return results.every((result) => result === true) ? true : undefined
+  }
+  if (value.startsWith('!') && !value.startsWith('!=')) {
+    const inner = conditionValue(value.slice(1), source)
+    return inner === undefined ? undefined : !inner
+  }
+  const comparison = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/.exec(value)
+  if (comparison) {
+    const left = conditionNumber(comparison[1], source)
+    const right = conditionNumber(comparison[3], source)
+    if (left === undefined || right === undefined) return undefined
+    switch (comparison[2]) {
+      case '==': return left === right
+      case '!=': return left !== right
+      case '<': return left < right
+      case '<=': return left <= right
+      case '>': return left > right
+      default: return left >= right
+    }
+  }
+  const number = conditionNumber(value, source)
+  return number === undefined ? undefined : number !== 0
+}
+
 function sourceStringValue(identifier: string, source: string, depth = 0): string | undefined {
   if (depth > 4) return undefined
   const initial = new RegExp(`\\b${identifier}\\s*=\\s*"((?:\\\\.|[^"])*)"`, 'g').exec(source)
@@ -110,6 +224,8 @@ function sourceStringValue(identifier: string, source: string, depth = 0): strin
 function sourceStringSample(identifier: string, source: string): string | undefined {
   const value = sourceStringValue(identifier, source)
   if (value) return value
+  const global = globalString(identifier, source)
+  if (global) return global
 
   const declaration = new RegExp(`\\b${identifier}\\s*=\\s*"[^"]*"[^\\r\\n]*`, 'i').exec(source)?.[0]
   if (declaration) {
@@ -136,6 +252,17 @@ function sourceStringSample(identifier: string, source: string): string | undefi
   return undefined
 }
 
+function sampleTextFor(identifier: string) {
+  const lower = identifier.toLowerCase()
+  if (/(?:^|_)ip(?:_|$)|address/.test(lower)) return '192.168.1.100'
+  if (/ssid/.test(lower)) return 'HomeWiFi'
+  if (/uptime/.test(lower)) return '3 h 07 min'
+  if (/time|clock/.test(lower)) return '12:00'
+  if (/date/.test(lower)) return '2026-10-15'
+  if (/status|message|msg/.test(lower)) return 'Message'
+  return undefined
+}
+
 function formatSourcePreview(format: string, args: string[], source: string) {
   let argIndex = 0
   const tokens = /%%|%(?:[-+ #0]*\d*(?:\.\d+)?[hlLzjt]*[diuoxXfFeEgGacsp])/g
@@ -146,7 +273,7 @@ function formatSourcePreview(format: string, args: string[], source: string) {
     const type = token[token.length - 1]
     if (type === 's' || type === 'p') {
       const id = argument.match(/\bid\(\s*([A-Za-z_]\w*)\s*\)/)?.[1] ?? argument.match(/^[A-Za-z_]\w*$/)?.[0]
-      return id ? sourceStringSample(id, source) ?? (/status|message|msg/i.test(id) ? 'Message' : '…') : '…'
+      return id ? sourceStringSample(id, source) ?? sampleTextFor(id) ?? '…' : '…'
     }
     const number = sourceNumber(argument, source)
     if (number === undefined) return '0'
@@ -163,15 +290,18 @@ function formatSourcePreview(format: string, args: string[], source: string) {
   })
 }
 
-function sourceFunctionArguments(source: string, method: string) {
-  const calls: string[][] = []
+function sourceFunctionArguments(source: string, method: string, before?: number) {
+  const calls: Array<string[] & { index?: number }> = []
   const pattern = new RegExp(`\\b${method}\\s*\\(`, 'g')
   for (const match of source.matchAll(pattern)) {
     const open = (match.index ?? 0) + match[0].lastIndexOf('(')
     const close = matchingDelimiter(source, open, '(', ')')
-    if (close >= 0) calls.push(parseCallArgs(source.slice(open + 1, close)))
+    if (close >= 0) calls.push(Object.assign(parseCallArgs(source.slice(open + 1, close)), { index: match.index }))
   }
-  return calls
+  if (before === undefined) return calls
+  // Prefer the closest call before the given position, so reused buffers show the right text.
+  const earlier = calls.filter((call) => (call.index ?? 0) < before).reverse()
+  return [...earlier, ...calls.filter((call) => (call.index ?? 0) >= before)]
 }
 
 function previewStringFunction(expression: string, source: string) {
@@ -195,19 +325,19 @@ function previewStringFunction(expression: string, source: string) {
   return fallback
 }
 
-function previewDynamicText(argument: string, source: string) {
+function previewDynamicText(argument: string, source: string, position?: number) {
   const cleanArg = argument.trim().replace(/\.c_str\(\)\s*$/, '').replace(/^String\s*\(\s*(.*)\s*\)$/, '$1')
   const functionValue = previewStringFunction(cleanArg, source)
   if (functionValue !== undefined) return functionValue
   const id = cleanArg.match(/\bid\(\s*([A-Za-z_]\w*)\s*\)/)?.[1]
   const identifier = id ?? cleanArg.match(/^[A-Za-z_]\w*$/)?.[0]
   if (identifier) {
-    const snprintf = sourceFunctionArguments(source, 'snprintf').find((args) => args[0] === identifier)
+    const snprintf = sourceFunctionArguments(source, 'snprintf', position).find((args) => args[0] === identifier)
     const snprintfFormatIndex = snprintf?.findIndex((argument, index) => index > 0 && literal(argument) !== undefined) ?? -1
     if (snprintf && snprintfFormatIndex >= 0) {
       return formatSourcePreview(literal(snprintf[snprintfFormatIndex])!, snprintf.slice(snprintfFormatIndex + 1), source)
     }
-    const sprintf = sourceFunctionArguments(source, 'sprintf').find((args) => args[0] === identifier)
+    const sprintf = sourceFunctionArguments(source, 'sprintf', position).find((args) => args[0] === identifier)
     const sprintfFormatIndex = sprintf?.findIndex((argument, index) => index > 0 && literal(argument) !== undefined) ?? -1
     if (sprintf && sprintfFormatIndex >= 0) {
       return formatSourcePreview(literal(sprintf[sprintfFormatIndex])!, sprintf.slice(sprintfFormatIndex + 1), source)
@@ -277,6 +407,7 @@ interface SourceElement {
   originalCode?: string
   originalElement?: CanvasElement
   fontExpression?: string
+  colorExpression?: string
 }
 
 interface SourceTopicMapping extends SourceTopic {
@@ -289,6 +420,7 @@ interface ConditionalBranch {
   start: number
   end: number
   label: string
+  condition?: string
 }
 
 interface ConditionalGroup extends SourceBranchGroup {
@@ -484,7 +616,46 @@ function matchingDelimiter(source: string, start: number, open: string, close: s
   return depth === 0 ? index - 1 : -1
 }
 
-function conditionalGroups(source: string, calls: Call[]): ConditionalGroup[] {
+function skipSpaceAndComments(source: string, index: number) {
+  while (index < source.length) {
+    if (/\s/.test(source[index])) index += 1
+    else if (source.startsWith('//', index) || source.startsWith('/*', index)) index = skipQuotedOrComment(source, index)
+    else break
+  }
+  return index
+}
+
+function stripComments(code: string) {
+  let result = ''
+  let index = 0
+  while (index < code.length) {
+    const skipped = skipQuotedOrComment(code, index)
+    if (skipped !== index) {
+      if (!code.startsWith('//', index) && !code.startsWith('/*', index)) result += code.slice(index, skipped)
+      else result += ' '
+      index = skipped
+    } else result += code[index++]
+  }
+  return result
+}
+
+function enclosingBlockEnd(source: string, from: number) {
+  let depth = 0
+  let index = from
+  while (index < source.length) {
+    const skipped = skipQuotedOrComment(source, index)
+    if (skipped !== index) { index = skipped; continue }
+    if (source[index] === '{') depth += 1
+    else if (source[index] === '}') {
+      if (depth === 0) return index
+      depth -= 1
+    }
+    index += 1
+  }
+  return source.length
+}
+
+function conditionalGroups(source: string, calls: Call[], context = source): ConditionalGroup[] {
   const groups: ConditionalGroup[] = []
   const consumedIfs = new Set<number>()
   let index = 0
@@ -498,53 +669,63 @@ function conditionalGroups(source: string, calls: Call[]): ConditionalGroup[] {
     const start = index++
     while (/[\w$]/.test(source[index] ?? '')) index += 1
     if (source.slice(start, index) !== 'if' || consumedIfs.has(start)) continue
-    let cursor = index
-    while (/\s/.test(source[cursor] ?? '')) cursor += 1
+    let cursor = skipSpaceAndComments(source, index)
     if (source[cursor] !== '(') continue
     const conditionEnd = matchingDelimiter(source, cursor, '(', ')')
     if (conditionEnd < 0) continue
     const condition = source.slice(cursor + 1, conditionEnd).trim()
-    cursor = conditionEnd + 1
-    while (/\s/.test(source[cursor] ?? '')) cursor += 1
+    cursor = skipSpaceAndComments(source, conditionEnd + 1)
     if (source[cursor] !== '{') continue
     const ifOpen = cursor
-    let ifClose = matchingDelimiter(source, ifOpen, '{', '}')
+    const ifClose = matchingDelimiter(source, ifOpen, '{', '}')
     if (ifClose < 0) continue
-    const branches: ConditionalBranch[] = [{ start: ifOpen + 1, end: ifClose, label: `if (${condition})` }]
+    const branches: ConditionalBranch[] = [{ start: ifOpen + 1, end: ifClose, label: `if (${condition})`, condition }]
     cursor = ifClose + 1
     while (true) {
-      while (/\s/.test(source[cursor] ?? '')) cursor += 1
-      if (!source.startsWith('else', cursor) || /[\w$]/.test(source[cursor + 4] ?? '')) break
-      cursor += 4
-      while (/\s/.test(source[cursor] ?? '')) cursor += 1
+      const elseStart = skipSpaceAndComments(source, cursor)
+      if (!source.startsWith('else', elseStart) || /[\w$]/.test(source[elseStart + 4] ?? '')) break
+      cursor = skipSpaceAndComments(source, elseStart + 4)
       let label = 'else'
+      let branchCondition: string | undefined
       if (source.startsWith('if', cursor) && !/[\w$]/.test(source[cursor + 2] ?? '')) {
-        const elseIfStart = cursor
-        consumedIfs.add(elseIfStart)
-        cursor += 2
-        while (/\s/.test(source[cursor] ?? '')) cursor += 1
+        consumedIfs.add(cursor)
+        cursor = skipSpaceAndComments(source, cursor + 2)
         if (source[cursor] !== '(') break
         const elseIfEnd = matchingDelimiter(source, cursor, '(', ')')
         if (elseIfEnd < 0) break
-        label = `else if (${source.slice(cursor + 1, elseIfEnd).trim()})`
-        cursor = elseIfEnd + 1
-        while (/\s/.test(source[cursor] ?? '')) cursor += 1
+        branchCondition = source.slice(cursor + 1, elseIfEnd).trim()
+        label = `else if (${branchCondition})`
+        cursor = skipSpaceAndComments(source, elseIfEnd + 1)
       }
       if (source[cursor] !== '{') break
       const branchOpen = cursor
       const branchClose = matchingDelimiter(source, branchOpen, '{', '}')
       if (branchClose < 0) break
-      branches.push({ start: branchOpen + 1, end: branchClose, label })
+      branches.push({ start: branchOpen + 1, end: branchClose, label, condition: branchCondition })
       cursor = branchClose + 1
     }
     const hasFinalElse = branches.at(-1)?.label === 'else'
-    if (!hasFinalElse) branches.push({ start: cursor, end: cursor, label: 'no condition matched' })
+    if (!hasFinalElse) {
+      // `if (...) { ...; return; }` without else: the rest of the block is the other state.
+      const returnsEarly = branches.every((branch) => /\breturn\s*;\s*$/.test(stripComments(source.slice(branch.start, branch.end)).trim()))
+      const blockEnd = returnsEarly ? enclosingBlockEnd(source, cursor) : cursor
+      branches.push({ start: cursor, end: blockEnd, label: returnsEarly ? 'otherwise (code after it)' : 'no condition matched' })
+    }
     const id = `branch-${start}`
     const counts = branches.map((branch) => calls.filter((call) => call.start >= branch.start && call.start < branch.end).length)
     if (!counts.some((count) => count > 0)) continue
-    const defaultChoice = hasFinalElse
-      ? counts.reduce((best, count, choice) => count > counts[best] ? choice : best, 0)
-      : branches.length === 2 ? 0 : branches.length - 1
+    let defaultChoice = -1
+    for (const [choice, branch] of branches.entries()) {
+      if (branch.condition === undefined) { defaultChoice = choice; break }
+      const value = conditionValue(branch.condition, context)
+      if (value === true) { defaultChoice = choice; break }
+      if (value === undefined) break
+    }
+    if (defaultChoice < 0) {
+      defaultChoice = branches.at(-1)?.label === 'no condition matched'
+        ? branches.length === 2 ? 0 : branches.length - 1
+        : counts.reduce((best, count, choice) => count > counts[best] ? choice : best, 0)
+    }
     groups.push({
       id,
       label: branches[0].label,
@@ -565,49 +746,73 @@ function conditionalGroups(source: string, calls: Call[]): ConditionalGroup[] {
   return groups
 }
 
-function displayLambdaRange(source: string) {
+interface DisplayLambda {
+  start: number
+  end: number
+  page?: string
+}
+
+function displayLambdaRanges(source: string): { lambdas: DisplayLambda[]; pages: boolean } {
   const lines = source.match(/[^\n]*(?:\n|$)/g)?.filter((line) => line.length > 0) ?? []
+  const lambdas: DisplayLambda[] = []
   let offset = 0
   let inDisplay = false
-  let displayEnd = source.length
-  let lambdaStart = -1
+  let pages = false
+  let pageId: string | undefined
+  let open: { indent: number; start: number; page?: string } | undefined
+  const close = (end: number) => {
+    if (open) lambdas.push({ start: open.start, end, page: open.page })
+    open = undefined
+  }
   for (const rawLine of lines) {
-    const line = rawLine.replace(/\r?\n$/, '')
+    const line = rawLine.replace(/\r?\n$/, '').replace(/\r$/, '')
+    const indent = line.match(/^\s*/)![0].length
+    const blank = !line.trim()
+    if (open && !blank && indent <= open.indent) close(offset)
     if (/^display:\s*(?:#.*)?$/.test(line)) {
       inDisplay = true
-      offset += rawLine.length
-      continue
-    }
-    if (inDisplay && /^\S[\w-]*\s*:/.test(line) && !/^\s*#/.test(line)) {
-      displayEnd = offset
-      break
-    }
-    if (inDisplay && lambdaStart < 0 && /^\s+lambda:\s*\|[-+]?\s*(?:#.*)?$/.test(line)) {
-      lambdaStart = offset + rawLine.length
+    } else if (inDisplay && /^\S/.test(line) && !/^#/.test(line)) {
+      close(offset)
+      inDisplay = false
+    } else if (inDisplay && !open) {
+      if (/^\s+pages:\s*(?:#.*)?$/.test(line)) pages = true
+      const id = /^\s*-\s+id:\s*["']?([A-Za-z_]\w*)/.exec(line)?.[1]
+      if (id) pageId = id
+      const lambda = /^(\s+)(?:-\s+)?lambda:\s*\|[-+]?\s*(?:#.*)?$/.exec(line)
+      if (lambda) open = { indent: line.indexOf('lambda'), start: offset + rawLine.length, page: pages ? pageId : undefined }
     }
     offset += rawLine.length
   }
-  if (lambdaStart < 0) return undefined
-  return { start: lambdaStart, end: displayEnd }
+  close(source.length)
+  return { lambdas, pages }
 }
 
 function displayConditionalGroups(source: string, calls: Call[], format: SourceFormat) {
-  if (format !== 'esphome') return conditionalGroups(source, calls)
-  const range = displayLambdaRange(source)
-  if (!range) return []
-  const lambda = source.slice(range.start, range.end)
-  const localCalls = calls
-    .filter((call) => call.start >= range.start && call.start < range.end)
-    .map((call) => ({ ...call, start: call.start - range.start, end: call.end - range.start }))
-  return conditionalGroups(lambda, localCalls).map((group) => ({
-    ...group,
-    id: `branch-${range.start + Number(group.id.slice('branch-'.length))}`,
-    parentPath: group.parentPath?.map(({ id, choice }) => ({
-      id: `branch-${range.start + Number(id.slice('branch-'.length))}`,
-      choice,
-    })),
-    branches: group.branches.map((branch) => ({ ...branch, start: branch.start + range.start, end: branch.end + range.start })),
-  }))
+  if (format !== 'esphome') return { groups: conditionalGroups(source, calls), lambdas: [] as DisplayLambda[] }
+  const { lambdas, pages } = displayLambdaRanges(source)
+  const shift = (id: string, offset: number) => `branch-${offset + Number(id.slice('branch-'.length))}`
+  const used = pages ? lambdas : lambdas.slice(0, 1)
+  const pageGroup: ConditionalGroup | undefined = pages && used.length > 1 ? {
+    id: `branch-${used[0].start}`,
+    label: 'Display page',
+    choices: used.map((lambda, index) => lambda.page ?? `page ${index + 1}`),
+    branches: used.map((lambda, index) => ({ start: lambda.start, end: lambda.end, label: lambda.page ?? `page ${index + 1}` })),
+    defaultChoice: 0,
+  } : undefined
+  const groups = used.flatMap((range, page) => {
+    const lambda = source.slice(range.start, range.end)
+    const localCalls = calls
+      .filter((call) => call.start >= range.start && call.start < range.end)
+      .map((call) => ({ ...call, start: call.start - range.start, end: call.end - range.start }))
+    const root = pageGroup ? [{ id: pageGroup.id, choice: page }] : []
+    return conditionalGroups(lambda, localCalls, source).map((group) => ({
+      ...group,
+      id: shift(group.id, range.start),
+      parentPath: [...root, ...(group.parentPath ?? []).map(({ id, choice }) => ({ id: shift(id, range.start), choice }))],
+      branches: group.branches.map((branch) => ({ ...branch, start: branch.start + range.start, end: branch.end + range.start })),
+    })).map((group) => group.parentPath.length ? group : { ...group, parentPath: undefined })
+  })
+  return { groups: pageGroup ? [pageGroup, ...groups] : groups, lambdas: used }
 }
 
 function numeric(value?: string) {
@@ -658,6 +863,22 @@ function evaluateArithmetic(expr: string): number | undefined {
   return Number.isFinite(res) ? Math.round(res) : undefined
 }
 
+// Plausible demo values for sensor states, so previews look like a running device.
+function sampleSensorValue(id: string): number | undefined {
+  const name = id.toLowerCase()
+  if (/temp/.test(name)) return 21.5
+  if (/hum|humid/.test(name)) return 45
+  if (/code|weather/.test(name)) return 0
+  if (/(?:^|_)(?:min|max)?_?cell\d*(?:_v|_volt\w*)?$|cell\d+_v/.test(name)) return 3.312
+  if (/soc|percent|level|battery$/.test(name)) return 78
+  if (/power|watt/.test(name)) return 85
+  if (/current|(?:^|_)amps?$|(?:^|_)i\d?$/.test(name)) return 4.82
+  if (/volt|(?:^|_)v$|_v\d?$/.test(name)) return 13.25
+  if (/rssi|signal/.test(name)) return -61
+  if (/intensity|rate|count/.test(name)) return 42
+  return undefined
+}
+
 function resolveSourceNumber(expression: string, source: string, depth = 0, size?: { width: number; height: number }): number | undefined {
   let value = expression.trim().replace(/^\(\s*(?:int|float|double|long|short|unsigned|uint\d+_t|int\d+_t|size_t)\s*\)\s*/, '')
   while (value.startsWith('(') && matchingDelimiter(value, 0, '(', ')') === value.length - 1) {
@@ -676,12 +897,11 @@ function resolveSourceNumber(expression: string, source: string, depth = 0, size
   if (/^(?:SCREEN_HEIGHT|TFT_HEIGHT|DISP_HEIGHT|DISPLAY_HEIGHT|SCREEN_H|TFT_H|HEIGHT)$/i.test(value)) return screenH
 
   const stateValue = /^id\(\s*([A-Za-z_]\w*)\s*\)\.state$/.exec(value)
-  if (stateValue) {
-    const id = stateValue[1].toLowerCase()
-    if (/temp/.test(id)) return 21.5
-    if (/hum|humid/.test(id)) return 45
-    if (/code|weather/.test(id)) return 0
-    return 0
+  if (stateValue) return sampleSensorValue(stateValue[1]) ?? 0
+  const globalValue = /^id\(\s*([A-Za-z_]\w*)\s*\)$/.exec(value)?.[1]
+  if (globalValue) {
+    const global = esphomeGlobals(source).get(globalValue)?.value
+    return sampleSensorValue(globalValue) ?? (typeof global === 'number' ? global : undefined)
   }
 
   // Compound expression containing arithmetic operators
@@ -860,7 +1080,8 @@ function isStaticColor(value?: string) {
   const token = value.trim()
   if (/^0x[\da-f]{1,8}$/i.test(token)) return true
   if (/^(?:tft\.|display\.|gfx->)?(?:color565|rgb565)\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$/i.test(token)) return true
-  if (/^Color\(\s*(?:0x[\da-f]{1,2}|\d+)\s*,\s*(?:0x[\da-f]{1,2}|\d+)\s*,\s*(?:0x[\da-f]{1,2}|\d+)\s*\)$/i.test(token)) return true
+  if (/^Color\(\s*(?:0x[\da-f]{1,2}|\d+)\s*,\s*(?:0x[\da-f]{1,2}|\d+)\s*,\s*(?:0x[\da-f]{1,2}|\d+)\s*(?:,\s*(?:0x[\da-f]{1,2}|\d+)\s*)?\)$/i.test(token)) return true
+  if (/^Color\(\s*0x[\da-f]{1,6}\s*\)$/i.test(token)) return true
   if (/^Color::\w+$/.test(token)) return true
   const stripped = token.replace(/^(?:TFT_|SSD1306_|ILI9341_|ST7735_|SH110X_)/, '')
   return Object.hasOwn(namedColors, token) || Object.hasOwn(namedColors, stripped)
@@ -872,6 +1093,8 @@ function color(value?: string) {
   if (token === '0' || token === 'LOW') return '#000000'
   if (token === '1' || token === 'HIGH') return '#ffffff'
   if (token.startsWith('Color::')) return namedColors[token.slice('Color::'.length)] ?? '#ffffff'
+  const packed = token.match(/^Color\(\s*0x([\da-f]{1,6})\s*\)$/i)
+  if (packed) return `#${packed[1].padStart(6, '0').toLowerCase()}`
   const c565 = token.match(/(?:color565|rgb565)\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i)
   if (c565) {
     const r = Math.min(255, Number(c565[1])).toString(16).padStart(2, '0')
@@ -894,10 +1117,28 @@ function color(value?: string) {
     const num = Number.parseInt(shortHex[1], 16)
     return num === 0 ? '#000000' : '#ffffff'
   }
-  const rgb = token.match(/Color\(\s*(0x[\da-f]{1,2}|\d+)\s*,\s*(0x[\da-f]{1,2}|\d+)\s*,\s*(0x[\da-f]{1,2}|\d+)\s*\)/i)
-  if (rgb) return `#${rgb.slice(1).map((part) => Number(part).toString(16).padStart(2, '0')).join('')}`
+  const rgb = token.match(/Color\(\s*(0x[\da-f]{1,2}|\d+)\s*,\s*(0x[\da-f]{1,2}|\d+)\s*,\s*(0x[\da-f]{1,2}|\d+)\s*(?:,\s*(0x[\da-f]{1,2}|\d+)\s*)?\)/i)
+  // The white channel of ESPHome Color(r, g, b, w) is not shown on RGB panels.
+  if (rgb) return `#${rgb.slice(1, 4).map((part) => Math.min(255, Number(part)).toString(16).padStart(2, '0')).join('')}`
   const stripped = token.replace(/^(?:TFT_|SSD1306_|ILI9341_|ST7735_|SH110X_)/, '')
   return namedColors[token] ?? namedColors[stripped] ?? '#ffffff'
+}
+
+// `Color c = Color(...)` / `c = Color(...)` before the call; assignments in the default branches win.
+function resolveColorVariable(arg: string, source: string, before: number, groups: ConditionalGroup[]) {
+  const name = arg.trim()
+  if (!/^[A-Za-z_]\w*$/.test(name) || isStaticColor(name)) return arg
+  const pattern = new RegExp(`\\b${name}\\s*(?:=\\s*|\\(\\s*(?=Color|0x))(Color\\s*\\([^()]*\\)|Color::\\w+|0x[\\da-fA-F]+)`, 'g')
+  const candidates = [...source.matchAll(pattern)]
+    .filter((match) => (match.index ?? 0) < before)
+    .map((match) => ({ index: match.index ?? 0, value: match[1].replace(/^Color\s+\(/, 'Color(') }))
+    .filter(({ value }) => isStaticColor(value))
+  if (!candidates.length) return arg
+  const selected = candidates.filter(({ index }) => groups.every((group) => {
+    const choice = group.branches.findIndex((branch) => index >= branch.start && index < branch.end)
+    return choice < 0 || choice === group.defaultChoice
+  }))
+  return (selected.at(-1) ?? candidates.at(-1))!.value
 }
 
 function svgDataUri(width: number, height: number, content: string) {
@@ -968,22 +1209,29 @@ function printfFormat(value: string) {
 
 function esphomeFontSizes(source: string) {
   const sizes = new Map<string, number>()
-  const fontStart = source.match(/^font:\s*$/m)
+  const fontStart = source.match(/^font:\s*(?:#.*)?$/m)
   if (!fontStart || fontStart.index === undefined) return sizes
   const start = fontStart.index + fontStart[0].length
   const nextSection = source.slice(start).search(/^[^\s#][\w-]*\s*:/m)
   const section = source.slice(start, nextSection < 0 ? undefined : start + nextSection)
+  let itemIndent: number | undefined
   let id: string | undefined
   let size: number | undefined
   const save = () => {
-    if (id && size !== undefined) sizes.set(id, size)
+    // ESPHome uses size 20 when a font does not set one.
+    if (id) sizes.set(id, size ?? 20)
     id = undefined
     size = undefined
   }
   for (const line of section.split(/\r?\n/)) {
-    if (/^\s{2}-\s+file\s*:/.test(line)) save()
-    const idMatch = /^\s+id:\s*([A-Za-z_]\w*)\s*$/.exec(line)
-    const sizeMatch = /^\s+size:\s*(\d+)\s*$/.exec(line)
+    const item = /^(\s*)-\s+/.exec(line)
+    if (item && (itemIndent === undefined || item[1].length <= itemIndent)) {
+      save()
+      itemIndent = item[1].length
+    }
+    const content = line.replace(/^\s*-\s+/, (match) => ' '.repeat(match.length))
+    const idMatch = /^\s+id:\s*["']?([A-Za-z_]\w*)["']?\s*(?:#.*)?$/.exec(content)
+    const sizeMatch = /^\s+size:\s*["']?(\d+(?:\.\d+)?)["']?\s*(?:#.*)?$/.exec(content)
     if (idMatch) id = idMatch[1]
     if (sizeMatch) size = Number(sizeMatch[1])
   }
@@ -1021,6 +1269,14 @@ function detectRenderer(source: string, calls: Call[], format: SourceFormat): Re
   return 'gfx'
 }
 
+function esphomeDisplaySection(source: string) {
+  const start = source.search(/^display:\s*(?:#.*)?$/m)
+  if (start < 0) return ''
+  const rest = source.slice(start)
+  const end = rest.search(/\n[^\s#][\w-]*\s*:/)
+  return end < 0 ? rest : rest.slice(0, end + 1)
+}
+
 function detectDisplay(source: string) {
   if (/2432S024|CYD\s*2\.4/i.test(source)) return 'cyd-24-ili9341'
   if (/2432S028|CYD/i.test(source)) return 'cyd-28-ili9341'
@@ -1030,6 +1286,8 @@ function detectDisplay(source: string) {
     const displaySection = source.slice(displaySectionStart).split(/\r?\n/).filter((line) => !/^\S/.test(line) || line.startsWith('display:')).join('\n')
     const platform = displaySection.match(/^\s*-\s+platform:\s*([^\s#]+)/m)?.[1]
     const model = displaySection.match(/^\s+model:\s*["']?([^"'\r\n#]+)/m)?.[1].trim()
+    if (/SH1106/i.test(model ?? '')) return 'sh1106-128x64'
+    if (/SSD1306\s*128x32/i.test(model ?? '')) return 'ssd1306-128x32'
     if (platform === 'ssd1306_i2c' || /SSD1306\s*128x64/i.test(model ?? '')) return 'ssd1306-128x64'
     if (platform === 'ssd1327_i2c' || /SSD1327/i.test(model ?? '')) return 'ssd1327-128x128'
     if (/SSD1306\s*128x32/i.test(model ?? '')) return 'ssd1306-128x32'
@@ -1087,7 +1345,7 @@ function detectSize(source: string) {
 export function parseDisplaySource(source: string, requestedFormat?: SourceFormat): ParsedDisplaySource {
   const calls = scanCalls(source)
   const format = requestedFormat ?? (/\b(it\.(?:printf|print|filled_rectangle|rectangle|line)\s*\()/i.test(source) ? 'esphome' : 'arduino')
-  const branches = displayConditionalGroups(source, calls, format)
+  const { groups: branches } = displayConditionalGroups(source, calls, format)
   const sourceBranchGroups = branches.map(({ id, label, choices, parentPath }) => ({ id, label, choices, parentPath }))
   const sourceBranchSelection = Object.fromEntries(branches.map((branch) => [branch.id, branch.defaultChoice]))
   const renderer = detectRenderer(source, calls, format)
@@ -1106,6 +1364,16 @@ export function parseDisplaySource(source: string, requestedFormat?: SourceForma
       suggestedSize = { width: suggestedSize.height, height: suggestedSize.width }
     } else if (!isLandscape && suggestedSize.width > suggestedSize.height && !suggestedDisplay?.boardRotation) {
       suggestedSize = { width: suggestedSize.height, height: suggestedSize.width }
+    }
+  }
+  if (format === 'esphome' && suggestedSize) {
+    // ESPHome `rotation:` turns the panel; explicit `dimensions:` already describe the drawing area.
+    const section = esphomeDisplaySection(source)
+    const yamlRotation = Number(section.match(/^\s+rotation:\s*["']?(\d+)/m)?.[1])
+    if (!/^\s+dimensions:/m.test(section) && [0, 90, 180, 270].includes(yamlRotation)) {
+      const swap = (size: { width: number; height: number }) => ({ width: size.height, height: size.width })
+      const native = suggestedDisplay?.esphomeRotation === 90 || suggestedDisplay?.esphomeRotation === 270 ? swap(suggestedSize) : suggestedSize
+      suggestedSize = yamlRotation === 90 || yamlRotation === 270 ? swap(native) : native
     }
   }
   const fontSizes = format === 'esphome' ? esphomeFontSizes(source) : new Map<string, number>()
@@ -1217,8 +1485,10 @@ export function parseDisplaySource(source: string, requestedFormat?: SourceForma
     let stroke = textColor
     let bitmapGeometry: SourceElement['bitmapGeometry']
     let triangleGeometry: SourceElement['triangleGeometry']
-    const args = call.args
+    const args = format === 'esphome' ? call.args.map((arg) => resolveColorVariable(arg, source, call.start, branches)) : call.args
     const method = call.method
+    const colorArgIndex = format === 'esphome' ? args.findIndex((arg) => isStaticColor(arg) && !/^(?:0|1|HIGH|LOW)$/.test(arg)) : -1
+    const colorExpression = colorArgIndex >= 0 ? call.args[colorArgIndex] : undefined
     const colorArg = args.find((arg) => /^Color(?:\(|::)/.test(arg))
     const styleColorArg = args.find((arg) => isStaticColor(arg))
     if (colorArg && !isStaticColor(colorArg)) { unsupported += 1; continue }
@@ -1249,7 +1519,7 @@ export function parseDisplaySource(source: string, requestedFormat?: SourceForma
         elements.push(values)
         mappings.push({
           id: values.id, start: call.start, end: call.end, receiver: call.receiver, operator: call.operator,
-          method, args, renderer, indent: call.indent, bitmapGeometry,
+          method, args: call.args, renderer, indent: call.indent, bitmapGeometry,
           originalCode: source.slice(call.start, call.end), originalElement: { ...values }, fontExpression,
         })
         continue
@@ -1279,7 +1549,7 @@ export function parseDisplaySource(source: string, requestedFormat?: SourceForma
       text = textIndex >= 0 ? literal(args[textIndex]) : undefined
       const dynamicTextArg = args[args.length - 1]
       if (renderer === 'esphome' && text === undefined && dynamicTextArg && /\bid\(\s*[A-Za-z_]\w*\s*\)|^[A-Za-z_]\w*(?:\[[^\]]+\])?$/.test(dynamicTextArg)) {
-        text = previewDynamicText(dynamicTextArg, source)
+        text = previewDynamicText(dynamicTextArg, source, call.start)
         dynamicVariables = [...new Set([...dynamicTextArg.matchAll(/\bid\(\s*([A-Za-z_]\w*)\s*\)/g)].map((match) => match[1]))]
         if (!dynamicVariables.length && /^[A-Za-z_]\w*(?:\[[^\]]+\])?$/.test(dynamicTextArg)) dynamicVariables = [dynamicTextArg]
       }
@@ -1289,7 +1559,7 @@ export function parseDisplaySource(source: string, requestedFormat?: SourceForma
           : (method === 'drawString' || method === 'drawCentreString' || method === 'drawCenterString' || method === 'drawRightString' || method === 'drawNumber') ? args[0]
           : args[0]
         if (candidate) {
-          text = previewDynamicText(candidate, source)
+          text = previewDynamicText(candidate, source, call.start)
           const varMatch = candidate.match(/^(?:&\s*)?([A-Za-z_]\w*)(?:\.c_str\(\))?$/)
           if (varMatch) dynamicVariables = [varMatch[1]]
         }
@@ -1413,7 +1683,7 @@ export function parseDisplaySource(source: string, requestedFormat?: SourceForma
         elements.push(values)
         mappings.push({
           id: values.id, start: call.start, end: call.end, receiver: call.receiver, operator: call.operator,
-          method, args, renderer, indent: call.indent, triangleGeometry,
+          method, args: call.args, renderer, indent: call.indent, triangleGeometry,
           originalCode: source.slice(call.start, call.end), originalElement: { ...values }, fontExpression,
         })
         continue
@@ -1467,7 +1737,8 @@ export function parseDisplaySource(source: string, requestedFormat?: SourceForma
       fill,
       stroke: fill === 'none' ? stroke : fill,
       radius,
-      fontSize: Math.max(5, elementFontSize),
+      // Drawing libraries draw 1 px lines; the editor derives the stroke width from fontSize.
+      fontSize: kind === 'line' ? 5 : Math.max(5, elementFontSize),
       dynamicVariables,
       ...textAlignment,
       ...(loopCoordinate ? { repeatAxis: loopCoordinate.axis, repeatOffsets: loopCoordinate.offsets } : {}),
@@ -1486,8 +1757,9 @@ export function parseDisplaySource(source: string, requestedFormat?: SourceForma
       receiver: call.receiver,
       operator: call.operator,
       method,
-      args,
+      args: call.args,
       previewText: text,
+      colorExpression,
       cursor: cursor?.receiver === call.receiver && (method === 'print' || method === 'println') ? { ...cursor } : undefined,
       renderer,
       indent: call.indent,
@@ -1623,6 +1895,10 @@ function emitElement(element: CanvasElement, mapping: SourceElement, fontArg?: s
     }
     return `${object}${method}(${args.join(', ')});`
   }
+  const esphomeColor = (hex: string, original?: string) => mapping.colorExpression && original === hex
+    ? mapping.colorExpression
+    : `Color(${parseInt(hex.slice(1, 3), 16)}, ${parseInt(hex.slice(3, 5), 16)}, ${parseInt(hex.slice(5, 7), 16)})`
+  const originalShape = mapping.originalElement && (mapping.originalElement.fill === 'none' ? mapping.originalElement.stroke : mapping.originalElement.fill)
   if (element.kind === 'image') return `// Imported image "${element.name.replace(/[\r\n]+/g, ' ').replace(/\*\//g, '* /')}" is not converted to a bitmap.`
   if (renderer === 'esphome') {
     if (element.kind === 'text') {
@@ -1636,12 +1912,12 @@ function emitElement(element: CanvasElement, mapping: SourceElement, fontArg?: s
         ? mapping.args[formatIndex]
         : esphomeString(element.text)
       const trailingArgs = formatIndex >= 0 ? mapping.args.slice(formatIndex + 1) : []
-      const color = `Color(${parseInt(element.fill.slice(1, 3), 16)}, ${parseInt(element.fill.slice(3, 5), 16)}, ${parseInt(element.fill.slice(5, 7), 16)})`
+      const color = esphomeColor(element.fill, mapping.originalElement?.fill)
       return `it.printf(${x}, ${y}, ${font}, ${color}, ${alignment}, ${format}${trailingArgs.length ? `, ${trailingArgs.join(', ')}` : ''});`
     }
     if (element.kind === 'rect') {
       const shapeColor = element.fill === 'none' ? element.stroke : element.fill
-      const color = `Color(${parseInt(shapeColor.slice(1, 3), 16)}, ${parseInt(shapeColor.slice(3, 5), 16)}, ${parseInt(shapeColor.slice(5, 7), 16)})`
+      const color = esphomeColor(shapeColor, originalShape)
       if (method === 'fill') return `it.fill(${color});`
       if (method === 'rectangle') return `it.rectangle(${x}, ${y}, ${w}, ${h}, ${color});`
       return `it.filled_rectangle(${x}, ${y}, ${w}, ${h}, ${color});`
@@ -1649,7 +1925,7 @@ function emitElement(element: CanvasElement, mapping: SourceElement, fontArg?: s
     if (element.kind === 'circle') {
       const outline = method === 'circle'
       const shapeColor = outline ? element.stroke : element.fill
-      const color = `Color(${parseInt(shapeColor.slice(1, 3), 16)}, ${parseInt(shapeColor.slice(3, 5), 16)}, ${parseInt(shapeColor.slice(5, 7), 16)})`
+      const color = esphomeColor(shapeColor, outline ? mapping.originalElement?.stroke : mapping.originalElement?.fill)
       return `it.${outline ? 'circle' : 'filled_circle'}(${number(element.x + element.width / 2)}, ${number(element.y + element.height / 2)}, ${number(Math.max(1, Math.min(element.width, element.height) / 2))}, ${color});`
     }
     if (element.kind === 'line') {
@@ -1660,10 +1936,10 @@ function emitElement(element: CanvasElement, mapping: SourceElement, fontArg?: s
         const originalLength = method === 'horizontal_line' ? loop?.originalWidth : loop?.originalHeight
         const length = method === 'horizontal_line' ? element.width : element.height
         const lengthArg = loop && length === originalLength ? mapping.args[2] : number(length)
-        const stroke = `Color(${parseInt(element.stroke.slice(1, 3), 16)}, ${parseInt(element.stroke.slice(3, 5), 16)}, ${parseInt(element.stroke.slice(5, 7), 16)})`
+        const stroke = esphomeColor(element.stroke, mapping.originalElement?.stroke)
         return `it.${method}(${xArg}, ${yArg}, ${lengthArg}${mapping.args.length > 3 ? `, ${stroke}` : ''});`
       }
-      return `it.line(${x}, ${y}, ${number(element.x + element.width)}, ${number(element.y + element.height)}, Color(${parseInt(element.stroke.slice(1, 3), 16)}, ${parseInt(element.stroke.slice(3, 5), 16)}, ${parseInt(element.stroke.slice(5, 7), 16)}));`
+      return `it.line(${x}, ${y}, ${number(element.x + element.width)}, ${number(element.y + element.height)}, ${esphomeColor(element.stroke, mapping.originalElement?.stroke)});`
     }
   }
   if (element.kind === 'text') {

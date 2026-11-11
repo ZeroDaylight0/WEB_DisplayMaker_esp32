@@ -38,11 +38,36 @@ Design display layouts, import existing code and export graphics or firmware-rea
 |---|---|
 | **Visual editor** | Text, rectangles (including rounded), circles, lines and images. Fill or outline only, layers, undo and redo, grid snapping, arrow-key nudging and zoom. |
 | **Source import** | Load Arduino `.ino` / `.cpp` or ESPHome YAML: recognized commands become editable elements. |
+| **Screen renders** | One click renders the screen as a pixel-accurate PNG in a device bezel, or a sheet with every page and `if`/`else` state of imported code. |
 | **Export** | Layouts as PNG, SVG and JSON. Starter code for Arduino (U8g2 / Arduino_GFX) and ESPHome, with Cyrillic text support. |
 | **Custom displays** | Any resolution from 8 to 2048 px; custom displays are saved in the browser. |
 | **Project storage** | Autosave in the browser, plus accounts on your own server to sync projects between devices. |
 
 The importer understands common U8g2, TFT_eSPI, Adafruit_GFX / Arduino_GFX and ESPHome drawing commands. The original file is kept as a whole, and export replaces only the recognized drawing commands. Unrecognized or dynamic code is left untouched and listed in the warnings.
+
+ESPHome specifics: `pages:` become a page switcher, an early `if (...) { ...; return; }`
+is treated as a separate screen, `rotation:` is applied to board presets, and
+fonts, globals and `Color(0xRRGGBB)` values are read from the YAML.
+
+## Screen renders
+
+The **Render** button above the canvas draws the screen the way the
+microcontroller does: 1-bit glyph edges, 1 px lines, white-on-black pixels for
+monochrome OLEDs. The result is scaled up without smoothing and can be placed in
+a device bezel.
+
+For imported code, **All screen states** renders a labelled sheet with every
+ESPHome page and every distinct `if` / `else` branch, using the `initial_value`
+of ESPHome globals and demo values for sensors.
+
+<p align="center"><img src="docs/screenshots/render-oled.png" width="360" alt="Rendered SH1106 screen in a bezel"></p>
+
+<details>
+<summary>All states of an imported ESPHome weather display</summary>
+
+![Sheet with seven screen states](docs/screenshots/render-states.png)
+
+</details>
 
 ## Quick start
 
