@@ -132,7 +132,9 @@ export async function createApiServer({
   dataDir = join(root, 'data'),
   staticDir = join(root, 'dist'),
   serveStatic = true,
-  allowRegistration = envFlag('PIXELFORGE_ALLOW_REGISTRATION') ?? true,
+  // true: anyone can register; false: nobody can; 'first-account' (default): only until the
+  // first account exists, so a server reachable on the network is not open to strangers.
+  allowRegistration = envFlag('PIXELFORGE_ALLOW_REGISTRATION') ?? 'first-account',
   trustProxy = envFlag('PIXELFORGE_TRUST_PROXY') ?? false,
   secureCookies = envFlag('PIXELFORGE_SECURE_COOKIE'),
 } = {}) {
@@ -247,6 +249,13 @@ export async function createApiServer({
   }, 60 * 60 * 1000)
   cleanupTimer.unref()
 
+  const countUsers = database.prepare('SELECT COUNT(*) AS count FROM users')
+  const registrationOpen = () => allowRegistration === true
+    || allowRegistration === 'first-account' && countUsers.get().count === 0
+  const registrationClosedMessage = allowRegistration === 'first-account'
+    ? 'Registration is closed: this server already has an account. Set PIXELFORGE_ALLOW_REGISTRATION=1 to allow more.'
+    : 'Registration is disabled on this server.'
+
   const userByUsername = database.prepare('SELECT id, username, salt, passwordHash FROM users WHERE usernameKey = ?')
   const userBySession = database.prepare(`
     SELECT users.id, users.username, users.salt, users.passwordHash
@@ -358,6 +367,9 @@ export async function createApiServer({
     const token = randomBytes(32).toString('base64url')
     transaction(() => {
       if (register) {
+        // Checked again inside the write transaction so two simultaneous sign-ups on a fresh
+        // server cannot both become the "first" account.
+        if (!registrationOpen()) throw httpError(403, registrationClosedMessage)
         database.prepare('INSERT INTO users (id, username, usernameKey, salt, passwordHash) VALUES (?, ?, ?, ?, ?)').run(user.id, user.username, usernameKey, user.salt, user.passwordHash)
       }
       database.prepare('INSERT INTO sessions (tokenHash, userId, expiresAt) VALUES (?, ?, ?)').run(hashToken(token), user.id, Date.now() + sessionAge)
@@ -390,14 +402,14 @@ export async function createApiServer({
       }
 
       if (request.method === 'GET' && pathname === '/api/config') {
-        reply(response, 200, { allowRegistration })
+        reply(response, 200, { allowRegistration: registrationOpen() })
         return
       }
 
       if (request.method === 'POST' && (pathname === '/api/auth/register' || pathname === '/api/auth/login')) {
         const register = pathname.endsWith('/register')
-        if (register && !allowRegistration) {
-          reply(response, 403, { error: 'Registration is disabled on this server.' })
+        if (register && !registrationOpen()) {
+          reply(response, 403, { error: registrationClosedMessage })
           return
         }
         if (rateLimited(request, pathname)) {

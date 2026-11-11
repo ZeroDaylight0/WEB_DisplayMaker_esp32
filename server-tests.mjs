@@ -14,7 +14,7 @@ let baseUrl
 
 before(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'pixelforge-test-'))
-  server = await createApiServer({ dataDir, serveStatic: false })
+  server = await createApiServer({ dataDir, serveStatic: false, allowRegistration: true })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   baseUrl = `http://127.0.0.1:${server.address().port}`
 })
@@ -102,7 +102,7 @@ test('cloud projects are private to each account and persist after restart', asy
   assert.equal(oversizedProject.response.status, 400)
 
   await closeServer(server)
-  server = await createApiServer({ dataDir, serveStatic: false })
+  server = await createApiServer({ dataDir, serveStatic: false, allowRegistration: true })
   baseUrl = await listen(server)
   const persisted = await json(`/api/projects/${id}`, { cookie })
   assert.equal(persisted.body.project.document.name, 'OLED UI')
@@ -267,6 +267,32 @@ test('rejects malformed project ids and lists projects newest first', async () =
   await json('/api/projects', { method: 'POST', cookie, body: { project: { name: 'Newest' } } })
   const list = await json('/api/projects', { cookie })
   assert.equal(list.body.projects[0].name, 'Newest')
+})
+
+test('by default only the first account can register', async () => {
+  const firstDir = await mkdtemp(join(tmpdir(), 'pixelforge-first-test-'))
+  let firstServer
+  try {
+    firstServer = await createApiServer({ dataDir: firstDir, serveStatic: false, allowRegistration: 'first-account' })
+    const firstUrl = await listen(firstServer)
+    const register = (username) => fetch(`${firstUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username, password: 'secure-password-123' }),
+    })
+    assert.equal((await (await fetch(`${firstUrl}/api/config`)).json()).allowRegistration, true)
+
+    const [a, b] = await Promise.all([register('owner'), register('racer')])
+    assert.deepEqual([a.status, b.status].sort(), [200, 403], 'only one of two simultaneous sign-ups wins')
+
+    assert.equal((await (await fetch(`${firstUrl}/api/config`)).json()).allowRegistration, false)
+    const later = await register('stranger')
+    assert.equal(later.status, 403)
+    assert.match((await later.json()).error, /already has an account/)
+  } finally {
+    if (firstServer?.listening) await closeServer(firstServer)
+    await rm(firstDir, { recursive: true, force: true })
+  }
 })
 
 test('registration can be disabled and secure cookies can be forced', async () => {

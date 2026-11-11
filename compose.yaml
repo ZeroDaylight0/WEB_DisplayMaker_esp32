@@ -3,9 +3,10 @@ services:
     build: .
     ports:
       - "4173:4173"
-    environment:
-      # Set to "0" after creating your account to block new sign-ups.
-      PIXELFORGE_ALLOW_REGISTRATION: "1"
+    # By default only the first account can be created. Uncomment to change that:
+    # environment:
+    #   PIXELFORGE_ALLOW_REGISTRATION: "1"   # anyone can create an account
+    #   PIXELFORGE_ALLOW_REGISTRATION: "0"   # nobody can, not even the first
     volumes:
       - pixelforge-data:/data
     restart: unless-stopped
