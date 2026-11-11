@@ -442,6 +442,7 @@ function App() {
     setCloudError('')
     try {
       await signOut()
+      getServerConfig().then((config) => setAllowRegistration(config.allowRegistration)).catch(() => {})
       setAccount(null)
       setCloudProjects([])
       setIsAccountOpen(false)
@@ -1168,7 +1169,7 @@ function App() {
             </form>
             {allowRegistration
               ? <button className="account-mode-switch" onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setCloudError('') }}>{authMode === 'login' ? 'No account? Create one' : 'Already have an account? Sign in'}</button>
-              : <p className="account-hint">The server administrator has disabled new registrations.</p>}
+              : <p className="account-hint">New accounts are disabled on this server.</p>}
           </>}
           {account && cloudError && <p className="account-error" role="alert">{cloudError}</p>}
           <div className="account-footer"><Save size={13} /> Web projects and source code export are separate features.</div>
